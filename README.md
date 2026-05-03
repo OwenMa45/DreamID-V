@@ -16,6 +16,7 @@
 <p>
 
 ## 🔥 News
+- [05/01/2026] 🎉 Our omni version [DreamID-Omni](https://github.com/Guoxu1233/DreamID-Omni) is accepted by ICML 2026!
 - [01/13/2026] 🔥 Thanks Goldlionren for supporting the [DreamID-V Faster ComfyUI](https://github.com/Goldlionren/ComfyUI_JR_DreamID-V).
 - [01/12/2026] 🔥 We released [DreamID-V-Wan-1.3B-Faster](https://github.com/bytedance/DreamID-V?tab=readme-ov-file#dreamid-v-wan-13b-faster), achieving a 1x inference speed boost with lower VRAM usage!
 - [01/11/2026] 🔥 Thanks Goldlionren for supporting the [16GB VRAM GPUs version ComfyUI](https://github.com/Goldlionren/ComfyUI_JR_DreamID-V).
