@@ -171,14 +171,11 @@ By using this software, you agree to adhere to these guidelines and applicable l
 If you find our work helpful, please consider citing our paper and leaving valuable stars
 
 ```
-@misc{guo2026dreamidvbridgingimagetovideogaphighfidelity,
-      title={DreamID-V:Bridging the Image-to-Video Gap for High-Fidelity Face Swapping via Diffusion Transformer}, 
-      author={Xu Guo and Fulong Ye and Xinghui Li and Pengqi Tu and Pengze Zhang and Qichao Sun and Songtao Zhao and Xiangwang Hou and Qian He},
-      year={2026},
-      eprint={2601.01425},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2601.01425}, 
+@article{guo2026dreamidv,
+  title   = {DreamID-V: Bridging the Image-to-Video Gap for High-Fidelity Face Swapping via Diffusion Transformer},
+  author  = {Guo, Xu and Ye, Fulong and Li, Xinghui and Tu, Pengqi and Zhang, Pengze and Sun, Qichao and Zhao, Songtao and Hou, Xiangwang and He, Qian},
+  journal = {arXiv preprint arXiv:2601.01425},
+  year    = {2026}
 }
 ```
 
