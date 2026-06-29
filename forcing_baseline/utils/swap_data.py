@@ -5,6 +5,8 @@ The conditioning layout matches the DreamID-V-Faster backbone:
   * ``img_ref`` = reference-face latent                          -> [16, 1, h, w]
   * ``clean_latent`` = teacher swapped-video latent              -> [F, 16, h, w]
 """
+import os
+
 import lmdb
 import numpy as np
 import torch
@@ -37,6 +39,8 @@ class LMDBWriter:
     """Incremental, multi-array LMDB writer compatible with ``utils.lmdb_``."""
 
     def __init__(self, path: str, map_size: int = 1 << 42):
+        # lmdb only creates the leaf dir if its parent exists; make the full path.
+        os.makedirs(path, exist_ok=True)
         self.env = lmdb.open(path, map_size=map_size)
         self.count = 0
         self.row_shapes = {}

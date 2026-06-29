@@ -21,6 +21,7 @@ DREAMIDV_CKPT=${DREAMIDV_CKPT:-${MODELS_DIR}/dreamidv_faster.pth}
 INPUT_DIR=${INPUT_DIR:-/inspire/hdd/global_user/liumingyu-253208120284/lzk/codes/Causal-Forcing_LivingSwap/datasets/humanvid_5000/part_004/input}
 MANIFEST=${MANIFEST:-${PROJECT_ROOT}/corpus.jsonl}
 OUTPUT_LMDB=${OUTPUT_LMDB:-${PROJECT_ROOT}/dataset/swap_latents}
+mkdir -p "${OUTPUT_LMDB}"
 
 # Stage-0 is single-GPU (teacher inference).
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}

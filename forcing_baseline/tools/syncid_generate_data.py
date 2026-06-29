@@ -137,6 +137,11 @@ def main():
         items = [json.loads(line) for line in f if line.strip()]
     if args.max_samples > 0:
         items = items[: args.max_samples]
+    print(f"[stage0] loaded {len(items)} groups from {args.manifest}")
+    if not items:
+        raise SystemExit(
+            f"[stage0] manifest {args.manifest} is empty -- run build_manifest first "
+            "(check INPUT_DIR and the _ref.jpg/_mask.mp4 suffixes).")
 
     writer = LMDBWriter(args.output_lmdb)
     # The LMDB stores one global shape for every row, so all kept samples must
