@@ -1,0 +1,21 @@
+# Stage-1: causal AR diffusion (teacher forcing).
+trainer: diffusion
+
+# init from the StageA-converted causal checkpoint
+generator_ckpt: checkpoints/causal_init.pt
+
+teacher_forcing: true
+noise_augmentation_max_timestep: 0
+guidance_scale: 1.0
+denoising_loss_type: flow
+num_train_timestep: 1000
+timestep_shift: 8.0
+
+lr: 1.0e-05
+batch_size: 1
+ema_weight: 0.0
+ema_start_step: 1000000
+log_iters: 1000
+gradient_checkpointing: true
+
+data_path: dataset/swap_latents

@@ -1,0 +1,45 @@
+# Stage-3: DMD distillation.
+#   generator  = causal student (init from Stage-2 CD)
+#   real_score = bidirectional DreamID-V-Faster teacher (frozen)
+#   fake_score = bidirectional critic (trainable, init from teacher)
+# CFG acts on img_ref (cond = real reference face / uncond = zeroed reference).
+trainer: distillation
+distribution_loss: dmd
+
+generator_ckpt: checkpoints/chunkwise/causal_cd.pt
+real_score_ckpt: checkpoints/dreamidv_faster.pth
+fake_score_ckpt: checkpoints/dreamidv_faster.pth
+
+denoising_step_list:
+- 1000
+- 750
+- 500
+- 250
+warp_denoising_step: true
+
+num_train_timestep: 1000
+timestep_shift: 8.0
+denoising_loss_type: flow
+real_guidance_scale: 5.0
+fake_guidance_scale: 0.0
+ts_schedule: true
+ts_schedule_max: false
+min_score_timestep: 0
+dfake_gen_update_ratio: 5
+
+lr: 2.0e-06
+lr_critic: 4.0e-07
+beta1: 0.0
+beta2: 0.999
+beta1_critic: 0.0
+beta2_critic: 0.999
+batch_size: 1
+ema_weight: 0.99
+ema_start_step: 200
+log_iters: 1000
+gradient_checkpointing: true
+
+# ID / ArcFace loss interface (disabled: DreamID-V ships no ArcFace head)
+lambda_id: 0.0
+
+data_path: dataset/swap_latents

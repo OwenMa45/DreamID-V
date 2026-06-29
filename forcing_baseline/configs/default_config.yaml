@@ -1,0 +1,83 @@
+# ----------------------------------------------------------------------------
+# Shared defaults for the causal DreamID-V distillation framework.
+# Stage configs (ar_diffusion / causal_cd / dmd / inference) are merged on top.
+# All stages are chunkwise (num_frame_per_block=3) on 480p latents
+# [B, 21, 16, 60, 104]; the backbone is Wan2.1-1.3B with DreamID-V conditioning
+# (patch_embedding in_dim=48, ref_conv for img_ref).
+# ----------------------------------------------------------------------------
+
+# --- model / architecture ---
+causal: true
+is_causal: true
+independent_first_frame: false        # img_ref sink is handled inside the model
+i2v: false
+num_training_frames: 21
+num_frame_per_block: 3                 # chunkwise
+local_attn_size: -1                    # global causal attention
+sink_size: 1                           # reference-face prefix frame
+context_noise: 0
+image_or_video_shape:
+- 1
+- 21
+- 16
+- 60
+- 104
+model_kwargs:
+  timestep_shift: 8.0
+
+# --- DreamID-V checkpoints (FILL IN) ---
+t5_checkpoint: checkpoints/models_t5_umt5-xxl-enc-bf16.pth
+t5_tokenizer: checkpoints/google/umt5-xxl
+vae_checkpoint: checkpoints/Wan2.1_VAE.pth
+
+# --- diffusion / scheduler ---
+num_train_timestep: 1000
+timestep_shift: 8.0
+denoising_loss_type: flow
+guidance_scale: 1.0
+warp_denoising_step: false
+same_step_across_blocks: true
+last_step_only: false
+ts_schedule: true
+ts_schedule_max: false
+min_score_timestep: 0
+
+# --- optimisation ---
+mixed_precision: true
+gradient_checkpointing: true
+lr: 2.0e-06
+beta1: 0.0
+beta2: 0.999
+weight_decay: 0.01
+batch_size: 1
+grad_accum: 1
+max_grad_norm: 10.0
+max_grad_norm_generator: 10.0
+max_grad_norm_critic: 10.0
+
+# --- EMA ---
+ema_weight: 0.0
+ema_start_step: 200
+
+# --- FSDP ---
+sharding_strategy: hybrid_full
+generator_fsdp_wrap_strategy: size
+real_score_fsdp_wrap_strategy: size
+fake_score_fsdp_wrap_strategy: size
+text_encoder_fsdp_wrap_strategy: size
+text_encoder_cpu_offload: false
+
+# --- data / logging ---
+seed: 0
+data_path: dataset/swap_latents
+gc_interval: 100
+log_iters: 1000
+no_save: false
+no_visualize: true
+load_raw_video: false
+disable_wandb: true
+wandb_host: https://api.wandb.ai
+wandb_key: your_key
+wandb_entity: your_entity
+wandb_project: dreamidv_causal_forcing
+negative_prompt: ""

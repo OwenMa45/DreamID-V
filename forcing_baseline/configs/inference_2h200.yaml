@@ -1,0 +1,31 @@
+# Few-step streaming inference (2xH200 pipeline output).
+# Merged ON TOP of default_config.yaml.
+trainer: inference
+
+# --- run-machine absolute paths ---
+vae_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/Wan2.1_VAE.pth
+t5_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/models_t5_umt5-xxl-enc-bf16.pth
+t5_tokenizer: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/google/umt5-xxl
+
+# final distilled generator = Stage-3 DMD final ckpt (max_steps=5000 -> checkpoint_model_005000).
+generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/chunkwise/stage3_dmd_2h200/checkpoint_model_005000/model.pt
+
+denoising_step_list:
+- 1000
+- 750
+- 500
+- 250
+warp_denoising_step: false
+
+num_frame_per_block: 3
+num_training_frames: 21
+timestep_shift: 8.0
+context_noise: 0
+
+# Latent geometry is auto-derived from the encoded y at runtime; these are only
+# informational. 640x640 inputs -> ~624x624 -> 78x78 latent.
+height_lat: 78
+width_lat: 78
+num_channels: 16
+
+mixed_precision: true

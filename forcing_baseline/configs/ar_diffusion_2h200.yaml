@@ -1,0 +1,37 @@
+# Stage-1 (2xH200): causal AR diffusion (teacher forcing).
+# Real paths are baked in; this file is merged ON TOP of default_config.yaml,
+# so the entries below override the placeholder paths / sharding there.
+trainer: diffusion
+
+# --- run-machine absolute paths (Wan2.1-T2V-1.3B = VAE + T5) ---
+t5_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/models_t5_umt5-xxl-enc-bf16.pth
+t5_tokenizer: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/google/umt5-xxl
+vae_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/Wan2.1_VAE.pth
+data_path: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/dataset/swap_latents
+
+# init from the StageA-converted causal checkpoint
+generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/causal_init_2h200.pt
+
+# single-node 2-GPU -> full shard (hybrid_full is for multi-node)
+sharding_strategy: full
+
+teacher_forcing: true
+noise_augmentation_max_timestep: 0
+guidance_scale: 1.0
+denoising_loss_type: flow
+num_train_timestep: 1000
+timestep_shift: 8.0
+
+lr: 1.0e-05
+batch_size: 1
+ema_weight: 0.0
+ema_start_step: 1000000
+log_iters: 1000
+gradient_checkpointing: true
+
+# --- run control & wandb logging ---
+max_steps: 5000                # stop after 5k optimizer steps; ckpts at 1k/2k/.../5k
+disable_wandb: false
+wandb_key: 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
+wandb_entity: null             # use the default entity tied to the API key
+wandb_project: dreamidv_causal_forcing

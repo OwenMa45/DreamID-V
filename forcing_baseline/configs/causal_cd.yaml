@@ -1,0 +1,30 @@
+# Stage-2: causal genuine Consistency Distillation (CD).
+# Only ground-truth swap latents are needed; the frozen causal teacher performs
+# the AR one-step transition (img_ref CFG), student & EMA must stay consistent.
+trainer: consistency_distillation
+
+# student / teacher / EMA are all initialised from the Stage-1 AR checkpoint
+generator_ckpt: checkpoints/chunkwise/ar_diffusion.pt
+
+discrete_cd_N: 48
+guidance_scale: 3.0                    # CFG on img_ref in the teacher AR step
+num_train_timestep: 1000
+timestep_shift: 8.0
+denoising_loss_type: flow
+
+# the CD pipeline reuses the few-step list only for bookkeeping
+denoising_step_list:
+- 1000
+- 750
+- 500
+- 250
+warp_denoising_step: false
+
+lr: 2.0e-06
+batch_size: 1
+ema_weight: 0.99
+ema_start_step: 200
+log_iters: 1000
+gradient_checkpointing: true
+
+data_path: dataset/swap_latents

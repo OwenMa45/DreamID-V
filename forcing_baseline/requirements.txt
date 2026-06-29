@@ -1,0 +1,23 @@
+torch>=2.4.0
+torchvision>=0.19.0
+diffusers==0.31.0
+transformers>=4.49.0
+tokenizers>=0.20.3
+accelerate>=1.1.1
+omegaconf
+einops
+numpy==1.24.4
+lmdb
+tqdm
+imageio
+imageio-ffmpeg
+easydict
+ftfy
+decord
+opencv-python>=4.9.0.80
+sentencepiece
+flash-attn
+wandb
+# DWPose (Stage-0 / inference mask generation)
+onnx
+onnxruntime

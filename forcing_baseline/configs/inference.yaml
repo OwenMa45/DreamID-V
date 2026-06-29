@@ -1,0 +1,23 @@
+# Few-step streaming inference with the distilled causal generator.
+trainer: inference
+
+generator_ckpt: checkpoints/chunkwise/causal_dmd.pt
+
+denoising_step_list:
+- 1000
+- 750
+- 500
+- 250
+warp_denoising_step: false
+
+num_frame_per_block: 3
+num_training_frames: 21
+timestep_shift: 8.0
+context_noise: 0
+
+# 480p latent geometry
+height_lat: 60
+width_lat: 104
+num_channels: 16
+
+mixed_precision: true
