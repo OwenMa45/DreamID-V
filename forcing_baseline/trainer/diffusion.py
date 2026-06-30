@@ -56,6 +56,17 @@ class Trainer:
 
         # model + FSDP
         self.model = CausalDiffusion(config, device=self.device)
+
+        # Load the StageA init weights into the *un-wrapped* generator first. This
+        # is a purely local op; loading after FSDP-wrap goes through a full
+        # state-dict all-gather/scatter that can desync across ranks (NCCL watchdog
+        # timeout), especially when both ranks read a multi-GB ckpt off shared
+        # storage. Stage-2/3 already load before wrapping inside the model __init__.
+        if getattr(config, "generator_ckpt", False):
+            if self.is_main_process:
+                print(f"Loading init causal generator from {config.generator_ckpt}")
+            self.model.generator.load_checkpoint(config.generator_ckpt, strict=False)
+
         self.model.generator = fsdp_wrap(
             self.model.generator, sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision, wrap_strategy=config.generator_fsdp_wrap_strategy)
@@ -63,10 +74,6 @@ class Trainer:
             self.model.text_encoder, sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision, wrap_strategy=config.text_encoder_fsdp_wrap_strategy)
         self.model.vae = self.model.vae.to(device=self.device, dtype=self.dtype)
-
-        if getattr(config, "generator_ckpt", False):
-            print(f"Loading init causal generator from {config.generator_ckpt}")
-            self._load_generator_ckpt(config.generator_ckpt)
 
         self.generator_optimizer = torch.optim.AdamW(
             [p for p in self.model.generator.parameters() if p.requires_grad],
@@ -87,15 +94,6 @@ class Trainer:
 
         self.max_grad_norm = getattr(config, "max_grad_norm", 10.0)
         self.previous_time = None
-
-    def _load_generator_ckpt(self, path):
-        state_dict = torch.load(path, map_location="cpu")
-        if "generator" in state_dict:
-            state_dict = state_dict["generator"]
-        elif "model" in state_dict:
-            state_dict = state_dict["model"]
-        fixed = {k.replace("model._fsdp_wrapped_module.", "model."): v for k, v in state_dict.items()}
-        self.model.generator.load_state_dict(fixed, strict=False)
 
     def save(self):
         generator_state_dict = fsdp_state_dict(self.model.generator)
