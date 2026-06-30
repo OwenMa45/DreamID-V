@@ -180,6 +180,11 @@ def main():
         accepted += 1
     writer.close()
     print(f"[stage0] accepted {accepted}/{len(items)} samples")
+    if accepted == 0:
+        raise SystemExit(
+            f"[stage0] no samples written to {args.output_lmdb} -- every item was "
+            "skipped. Inspect the [skip] lines above (teacher inference / paths / "
+            "latent shape). The LMDB is unusable for training until this is fixed.")
 
 
 def _parse_args():

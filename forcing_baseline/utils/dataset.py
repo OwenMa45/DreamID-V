@@ -38,9 +38,16 @@ class TextDataset(Dataset):
 class SwapLatentLMDBDataset(Dataset):
     def __init__(self, data_path: str, max_pair: int = int(1e8)):
         self.env = lmdb.open(data_path, readonly=True, lock=False, readahead=False, meminit=False)
-        self.clean_shape = get_array_shape_from_lmdb(self.env, "clean_latent")
-        self.y_shape = get_array_shape_from_lmdb(self.env, "y")
-        self.ref_shape = get_array_shape_from_lmdb(self.env, "img_ref")
+        try:
+            self.clean_shape = get_array_shape_from_lmdb(self.env, "clean_latent")
+            self.y_shape = get_array_shape_from_lmdb(self.env, "y")
+            self.ref_shape = get_array_shape_from_lmdb(self.env, "img_ref")
+        except AttributeError as e:
+            raise RuntimeError(
+                f"LMDB at '{data_path}' has no 'clean_latent' shape metadata -- it is "
+                "empty or was not finalized. Re-run Stage-0 (scripts/stage0_gen_data_2h200.sh) "
+                "and confirm the '[stage0] accepted N/...' line reports N > 0."
+            ) from e
         self.max_pair = max_pair
 
     def __len__(self):
