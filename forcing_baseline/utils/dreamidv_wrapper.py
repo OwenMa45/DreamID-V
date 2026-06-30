@@ -146,8 +146,17 @@ class DreamIDVDiffusionWrapper(torch.nn.Module):
               f"{len(missing)} missing, {len(unexpected)} unexpected")
 
     def enable_gradient_checkpointing(self) -> None:
-        if hasattr(self.model, "enable_gradient_checkpointing"):
-            self.model.enable_gradient_checkpointing()
+        model = self.model
+        # Only the causal backbone implements checkpointing; the bidirectional
+        # WanModel (real/fake score) inherits ModelMixin but sets neither
+        # _supports_gradient_checkpointing nor a checkpointed forward, so calling
+        # diffusers' enable_gradient_checkpointing there would raise. Skip it.
+        if getattr(model, "_supports_gradient_checkpointing", False) and \
+                hasattr(model, "enable_gradient_checkpointing"):
+            model.enable_gradient_checkpointing()
+        else:
+            print(f"[DreamIDVDiffusionWrapper] gradient checkpointing unsupported "
+                  f"by {type(model).__name__}; skipping.")
 
     # ----- flow <-> x0 conversion (identical to Causal-Forcing) -----
     def _convert_flow_pred_to_x0(self, flow_pred, xt, timestep):

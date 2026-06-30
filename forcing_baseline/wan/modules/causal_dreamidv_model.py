@@ -402,8 +402,13 @@ class CausalDreamIDVModel(ModelMixin, ConfigMixin):
         self.block_mask = None
         self.num_frame_per_block = 1
 
-    def _set_gradient_checkpointing(self, module, value=False):
-        self.gradient_checkpointing = value
+    def _set_gradient_checkpointing(self, module=None, value=False, enable=None,
+                                    gradient_checkpointing_func=None):
+        # Compatible with both old diffusers (module, value) and new diffusers
+        # (enable=..., gradient_checkpointing_func=...) calling conventions.
+        if enable is not None:
+            value = enable
+        self.gradient_checkpointing = bool(value)
 
     # ------------------------------------------------------------------ masks
     @staticmethod
