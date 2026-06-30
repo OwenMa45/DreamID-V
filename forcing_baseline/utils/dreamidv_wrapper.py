@@ -104,6 +104,11 @@ class DreamIDVDiffusionWrapper(torch.nn.Module):
         cfg = dict(_DEFAULT_MODEL_CONFIG)
         if model_config:
             cfg.update(model_config)
+        # model_kwargs may carry scheduler-level params (e.g. timestep_shift) that
+        # the backbone constructor does not accept. timestep_shift is consumed as a
+        # dedicated arg above, so drop such non-architecture keys from cfg.
+        for _non_arch_key in ("timestep_shift",):
+            cfg.pop(_non_arch_key, None)
 
         if is_causal:
             self.model = CausalDreamIDVModel(local_attn_size=local_attn_size, sink_size=sink_size, **cfg)
