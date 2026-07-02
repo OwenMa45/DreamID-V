@@ -143,6 +143,19 @@ def main():
             f"[stage0] manifest {args.manifest} is empty -- run build_manifest first "
             "(check INPUT_DIR and the _ref.jpg/_mask.mp4 suffixes).")
 
+    # Multi-GPU data-parallel sharding: each process handles a round-robin slice
+    # of the (globally identical) item list and writes its own LMDB shard. The
+    # shards are merged afterwards (tools.merge_lmdb_shards) into the single LMDB
+    # the trainer reads, so the merged result is identical to a single-GPU run.
+    tag = "stage0"
+    if args.num_shards > 1:
+        assert 0 <= args.shard_id < args.num_shards, "shard_id out of range"
+        items = items[args.shard_id::args.num_shards]
+        tag = f"stage0][shard {args.shard_id}/{args.num_shards}"
+        print(f"[{tag}] processing {len(items)} groups on this GPU")
+        if not items:
+            raise SystemExit(f"[{tag}] empty shard -- reduce num_shards or add data.")
+
     writer = LMDBWriter(args.output_lmdb)
     # The LMDB stores one global shape for every row, so all kept samples must
     # share the same latent geometry [F, 16, h, w].  The first accepted sample
@@ -150,7 +163,7 @@ def main():
     # odd resolution) is skipped so the dataset stays loadable.
     ref_shape = None
     accepted = 0
-    for item in tqdm(items, desc="Stage-0 self-distill"):
+    for item in tqdm(items, desc=f"Stage-0 self-distill [{tag}]"):
         ref_video = item["ref_video"]
         ref_image = item["ref_image"]
         prompt = item.get("prompt", args.prompt)
@@ -179,10 +192,10 @@ def main():
         writer.add({"clean_latent": clean_latent, "y": y, "img_ref": img_ref, "prompts": prompt})
         accepted += 1
     writer.close()
-    print(f"[stage0] accepted {accepted}/{len(items)} samples")
+    print(f"[{tag}] accepted {accepted}/{len(items)} samples -> {args.output_lmdb}")
     if accepted == 0:
         raise SystemExit(
-            f"[stage0] no samples written to {args.output_lmdb} -- every item was "
+            f"[{tag}] no samples written to {args.output_lmdb} -- every item was "
             "skipped. Inspect the [skip] lines above (teacher inference / paths / "
             "latent shape). The LMDB is unusable for training until this is fixed.")
 
@@ -206,6 +219,10 @@ def _parse_args():
     p.add_argument("--base_seed", type=int, default=42)
     p.add_argument("--device_id", type=int, default=0)
     p.add_argument("--max_samples", type=int, default=-1)
+    p.add_argument("--num_shards", type=int, default=1,
+                   help="Total data-parallel shards (e.g. 8 for 8xH200)")
+    p.add_argument("--shard_id", type=int, default=0,
+                   help="This process's shard index in [0, num_shards)")
     return p.parse_args()
 
 
