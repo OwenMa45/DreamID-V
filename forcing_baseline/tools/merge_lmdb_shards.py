@@ -38,37 +38,39 @@ def _merge_one(shard_path, writer, ref_row_shapes):
         return 0, ref_row_shapes
     env = lmdb.open(shard_path, readonly=True, lock=False, readahead=False, meminit=False)
     added = 0
-    with env.begin() as txn:
-        clean_shape = _shape(txn, "clean_latent")
-        if clean_shape is None:
-            print(f"[merge] shard has no data (not finalized?), skipping: {shard_path}")
-            env.close()
-            return 0, ref_row_shapes
-        n = clean_shape[0]
-        shapes = {name: _shape(txn, name) for name in _ARRAY_FIELDS}
-        row_shapes = {name: shp[1:] for name, shp in shapes.items()}
+    try:
+        # NOTE: never call env.close() while inside this `with` block -- closing an
+        # env with a live txn is UB in lmdb and corrupts the next env.begin().
+        with env.begin() as txn:
+            clean_shape = _shape(txn, "clean_latent")
+            if clean_shape is None:
+                print(f"[merge] shard has no data (not finalized?), skipping: {shard_path}")
+                return 0, ref_row_shapes
+            n = clean_shape[0]
+            shapes = {name: _shape(txn, name) for name in _ARRAY_FIELDS}
+            row_shapes = {name: shp[1:] for name, shp in shapes.items()}
 
-        # lock the per-row geometry to the first non-empty shard; skip mismatches
-        # so the merged LMDB stays loadable (single global shape per field).
-        if ref_row_shapes is None:
-            ref_row_shapes = row_shapes
-        elif row_shapes != ref_row_shapes:
-            print(f"[merge] shard {shard_path} row shapes {row_shapes} != "
-                  f"{ref_row_shapes}; skipping whole shard.")
-            env.close()
-            return 0, ref_row_shapes
+            # lock the per-row geometry to the first non-empty shard; skip mismatches
+            # so the merged LMDB stays loadable (single global shape per field).
+            if ref_row_shapes is None:
+                ref_row_shapes = row_shapes
+            elif row_shapes != ref_row_shapes:
+                print(f"[merge] shard {shard_path} row shapes {row_shapes} != "
+                      f"{ref_row_shapes}; skipping whole shard.")
+                return 0, ref_row_shapes
 
-        for i in range(n):
-            sample = {}
-            for name in _ARRAY_FIELDS:
-                buf = txn.get(f"{name}_{i}_data".encode())
-                arr = np.frombuffer(buf, dtype=np.float16).reshape(row_shapes[name])
-                sample[name] = np.ascontiguousarray(arr)
-            praw = txn.get(f"prompts_{i}_data".encode())
-            sample["prompts"] = praw.decode() if praw is not None else "change face"
-            writer.add(sample)
-            added += 1
-    env.close()
+            for i in range(n):
+                sample = {}
+                for name in _ARRAY_FIELDS:
+                    buf = txn.get(f"{name}_{i}_data".encode())
+                    arr = np.frombuffer(buf, dtype=np.float16).reshape(row_shapes[name])
+                    sample[name] = np.ascontiguousarray(arr)
+                praw = txn.get(f"prompts_{i}_data".encode())
+                sample["prompts"] = praw.decode() if praw is not None else "change face"
+                writer.add(sample)
+                added += 1
+    finally:
+        env.close()
     print(f"[merge] +{added} samples from {shard_path}")
     return added, ref_row_shapes
 

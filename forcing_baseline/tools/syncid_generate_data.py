@@ -133,6 +133,14 @@ def main():
     context_path = args.context_path or os.path.join(
         args.dreamidv_root, "dreamidv_wan_faster", "context.pth")
 
+    # Expected latent frame count (Wan VAE temporal stride 4): 81 px frames -> 21.
+    # Enforcing this keeps every kept sample (and every shard) at the same shape,
+    # so the single-shape LMDB / multi-shard merge stays valid and matches the
+    # trainer's num_training_frames. Shorter clips are skipped.
+    expected_frames = args.expected_frames
+    if expected_frames <= 0:
+        expected_frames = (args.frame_num - 1) // 4 + 1
+
     with open(args.manifest, encoding="utf-8") as f:
         items = [json.loads(line) for line in f if line.strip()]
     if args.max_samples > 0:
@@ -182,9 +190,14 @@ def main():
             continue
 
         shape = tuple(clean_latent.shape)
+        # Enforce a consistent latent frame count across ALL shards/samples.
+        if shape[0] != expected_frames:
+            print(f"[skip] {shape[0]} latent frames != expected {expected_frames} "
+                  f"(clip too short?) for {ref_video}")
+            continue
         if ref_shape is None:
             ref_shape = shape
-            print(f"[stage0] latent geometry fixed to {ref_shape} (F, 16, h, w)")
+            print(f"[{tag}] latent geometry fixed to {ref_shape} (F, 16, h, w)")
         elif shape != ref_shape:
             print(f"[skip] latent shape {shape} != {ref_shape} for {ref_video}")
             continue
@@ -223,6 +236,8 @@ def _parse_args():
                    help="Total data-parallel shards (e.g. 8 for 8xH200)")
     p.add_argument("--shard_id", type=int, default=0,
                    help="This process's shard index in [0, num_shards)")
+    p.add_argument("--expected_frames", type=int, default=0,
+                   help="Required latent frame count; <=0 derives (frame_num-1)//4+1")
     return p.parse_args()
 
 
