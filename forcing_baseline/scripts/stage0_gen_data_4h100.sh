@@ -99,6 +99,19 @@ fi
 echo "[stage0-4gpu] merging ${NUM_GPUS} shards -> ${OUTPUT_LMDB}"
 python -m tools.merge_lmdb_shards --shards "${SHARD_DIRS[@]}" --output "${OUTPUT_LMDB}"
 
+# Read the merged LMDB back before touching shards. Guards against the
+# 'merge printed success but data.mdb missing' failure seen on network FS: if the
+# output is not readable, KEEP the shards so it can be re-merged without re-running
+# teacher inference.
+echo "[stage0-4gpu] verifying merged LMDB ..."
+if ! python -c "import lmdb,sys; e=lmdb.open('${OUTPUT_LMDB}', readonly=True, lock=False); \
+n=e.stat()['entries']; s=e.begin().get(b'clean_latent_shape'); \
+print('[verify] entries=%d clean_latent_shape=%s' % (n, s)); sys.exit(0 if s else 1)"; then
+  echo "[stage0-4gpu] merged LMDB NOT readable at ${OUTPUT_LMDB}; KEEPING shards for re-merge." >&2
+  echo "[stage0-4gpu] re-merge with: python -m tools.merge_lmdb_shards --shards ${SHARD_DIRS[*]} --output ${OUTPUT_LMDB}" >&2
+  exit 1
+fi
+
 if [ "${KEEP_SHARDS}" -eq 0 ]; then
   echo "[stage0-4gpu] removing shard LMDBs (set KEEP_SHARDS=1 to keep)"
   for d in "${SHARD_DIRS[@]}"; do rm -rf "${d}"; done
