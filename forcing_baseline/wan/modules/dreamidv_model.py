@@ -102,7 +102,14 @@ class WanLayerNorm(nn.LayerNorm):
         Args:
             x(Tensor): Shape [B, L, C]
         """
-        return super().forward(x.float()).type_as(x)
+        # Run LayerNorm in fp32 for numerical stability. Under FSDP mixed
+        # precision the affine weight/bias are bf16, so we must upcast them too --
+        # otherwise F.layer_norm gets an fp32 input with a bf16 weight and raises
+        # "expected scalar type Float but found BFloat16". Cast back to input dtype.
+        weight = self.weight.float() if self.weight is not None else None
+        bias = self.bias.float() if self.bias is not None else None
+        return nn.functional.layer_norm(
+            x.float(), self.normalized_shape, weight, bias, self.eps).type_as(x)
 
 
 class WanSelfAttention(nn.Module):
