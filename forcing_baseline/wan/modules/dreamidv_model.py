@@ -39,6 +39,11 @@ def rope_params(max_seq_len, dim, theta=10000):
 
 @amp.autocast(enabled=False)
 def rope_apply(x, grid_sizes, freqs):
+    # torch.view_as_complex / complex multiply below only accept fp16/fp32/fp64.
+    # Under FSDP mixed precision the incoming q/k are bf16, which is unsupported,
+    # so promote to fp32 here (the function already returns .float() and callers
+    # cast back via .type_as(v)). Keeps the whole RoPE math in fp32.
+    x = x.float()
     n, c = x.size(2), x.size(3) // 2
 
     # split freqs
