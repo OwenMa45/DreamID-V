@@ -56,6 +56,11 @@ class Trainer:
         self.output_path = config.logdir
 
         self.model = NaiveConsistency(config, device=self.device)
+        # Sync after the (network-backed) ckpt/T5/VAE loading inside the model ctor,
+        # before any FSDP collective, so a fast rank does not race into the first
+        # all-gather while a slow rank is still reading from shared storage
+        # (-> NCCL watchdog _ALLGATHER_BASE timeout). See utils/distributed.py.
+        barrier()
         self.model.generator = fsdp_wrap(
             self.model.generator, sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision, wrap_strategy=config.generator_fsdp_wrap_strategy,
@@ -80,8 +85,10 @@ class Trainer:
 
         dataset = SwapLatentLMDBDataset(config.data_path, max_pair=int(1e8))
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True, drop_last=True)
+        num_workers = int(getattr(config, "num_workers", 8))
         dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=config.batch_size, sampler=sampler, num_workers=8)
+            dataset, batch_size=config.batch_size, sampler=sampler, num_workers=num_workers,
+            persistent_workers=num_workers > 0)
         if self.is_main_process:
             print("DATASET SIZE %d" % len(dataset))
         self.dataloader = cycle(dataloader)

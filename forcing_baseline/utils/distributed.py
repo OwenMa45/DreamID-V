@@ -83,8 +83,14 @@ def launch_distributed_job(backend: str = "nccl"):
         init_method = f"tcp://[{host}]:{port}"
     else:  # IPv4
         init_method = f"tcp://{host}:{port}"
+    # The default 30-min NCCL watchdog easily fires when one rank is still reading
+    # multi-GB weights (T5/VAE/ckpt) off shared network storage while a faster rank
+    # has already raced into the first FSDP all-gather.  Make the collective timeout
+    # configurable (env DIST_TIMEOUT_MIN, default 120 min) so slow first-reads on a
+    # networked filesystem don't crash the job.
+    timeout_min = int(os.environ.get("DIST_TIMEOUT_MIN", "120"))
     dist.init_process_group(rank=rank, world_size=world_size, backend=backend,
-                            init_method=init_method, timeout=timedelta(minutes=30))
+                            init_method=init_method, timeout=timedelta(minutes=timeout_min))
     torch.cuda.set_device(local_rank)
 
 

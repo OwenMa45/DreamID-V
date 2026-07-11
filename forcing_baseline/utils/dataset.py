@@ -37,23 +37,40 @@ class TextDataset(Dataset):
 
 class SwapLatentLMDBDataset(Dataset):
     def __init__(self, data_path: str, max_pair: int = int(1e8)):
-        self.env = lmdb.open(data_path, readonly=True, lock=False, readahead=False, meminit=False)
+        self.data_path = data_path
+        # Read the shape metadata via a transient env, then close it. We do NOT keep
+        # an open LMDB handle on the parent process: the DataLoader forks its worker
+        # processes and an env (with its mmap / internal state) shared across fork is
+        # unsafe and can deadlock a single rank's workers -> NCCL all-gather timeout.
+        # Each worker reopens its own env lazily in __getitem__ instead.
+        self.env = None
+        env = lmdb.open(data_path, readonly=True, lock=False, readahead=False, meminit=False)
         try:
-            self.clean_shape = get_array_shape_from_lmdb(self.env, "clean_latent")
-            self.y_shape = get_array_shape_from_lmdb(self.env, "y")
-            self.ref_shape = get_array_shape_from_lmdb(self.env, "img_ref")
+            self.clean_shape = get_array_shape_from_lmdb(env, "clean_latent")
+            self.y_shape = get_array_shape_from_lmdb(env, "y")
+            self.ref_shape = get_array_shape_from_lmdb(env, "img_ref")
         except AttributeError as e:
             raise RuntimeError(
                 f"LMDB at '{data_path}' has no 'clean_latent' shape metadata -- it is "
                 "empty or was not finalized. Re-run Stage-0 (scripts/stage0_gen_data_2h200.sh) "
                 "and confirm the '[stage0] accepted N/...' line reports N > 0."
             ) from e
+        finally:
+            env.close()
         self.max_pair = max_pair
+
+    def _ensure_env(self):
+        # Opened lazily so the handle is created *inside* each DataLoader worker
+        # process rather than inherited across fork from the parent.
+        if self.env is None:
+            self.env = lmdb.open(
+                self.data_path, readonly=True, lock=False, readahead=False, meminit=False)
 
     def __len__(self):
         return min(self.clean_shape[0], self.max_pair)
 
     def __getitem__(self, idx):
+        self._ensure_env()
         clean_latent = retrieve_row_from_lmdb(
             self.env, "clean_latent", np.float16, idx, shape=self.clean_shape[1:])
         y = retrieve_row_from_lmdb(

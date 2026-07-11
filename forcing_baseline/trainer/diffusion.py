@@ -67,6 +67,14 @@ class Trainer:
                 print(f"Loading init causal generator from {config.generator_ckpt}")
             self.model.generator.load_checkpoint(config.generator_ckpt, strict=False)
 
+        # Hard sync BEFORE the first FSDP collective. Without this, a rank that
+        # finishes the (network-backed, multi-GB) T5/VAE/ckpt loading first races
+        # straight into the forward all-gather and waits on the slower rank; if the
+        # slow read exceeds the NCCL watchdog the whole job dies with an
+        # _ALLGATHER_BASE timeout. The barrier keeps every rank at the same point
+        # and, together with DIST_TIMEOUT_MIN, tolerates slow shared-storage reads.
+        barrier()
+
         self.model.generator = fsdp_wrap(
             self.model.generator, sharding_strategy=config.sharding_strategy,
             mixed_precision=config.mixed_precision, wrap_strategy=config.generator_fsdp_wrap_strategy)
@@ -81,8 +89,10 @@ class Trainer:
 
         dataset = SwapLatentLMDBDataset(config.data_path, max_pair=int(1e8))
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=True, drop_last=True)
+        num_workers = int(getattr(config, "num_workers", 8))
         dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=config.batch_size, sampler=sampler, num_workers=8)
+            dataset, batch_size=config.batch_size, sampler=sampler, num_workers=num_workers,
+            persistent_workers=num_workers > 0)
         if self.is_main_process:
             print("DATASET SIZE %d" % len(dataset))
         self.dataloader = cycle(dataloader)
