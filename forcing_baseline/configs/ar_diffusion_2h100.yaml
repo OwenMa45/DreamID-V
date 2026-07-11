@@ -33,7 +33,7 @@ gradient_checkpointing: true
 
 # --- run control & wandb logging ---
 max_steps: 5000                # stop after 5k optimizer steps; ckpts at 1k/2k/.../5k
-disable_wandb: false
-wandb_key: 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
+disable_wandb: true            # offline server: wandb fully disabled (also hard-off in code)
+# wandb_key: <removed -- no internet access on this server>
 wandb_entity: null             # use the default entity tied to the API key
 wandb_project: dreamidv_causal_forcing

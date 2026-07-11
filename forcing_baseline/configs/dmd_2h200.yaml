@@ -56,8 +56,8 @@ gradient_checkpointing: true
 # max_steps=5000 -> only ~1000 generator updates. Raise to ~25000 if you want
 # the generator to see ~5000 updates like Stage-1/2.
 max_steps: 5000
-disable_wandb: false
-wandb_key: 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
+disable_wandb: true            # offline server: wandb fully disabled (also hard-off in code)
+# wandb_key: <removed -- no internet access on this server>
 wandb_entity: null
 wandb_project: dreamidv_causal_forcing
 

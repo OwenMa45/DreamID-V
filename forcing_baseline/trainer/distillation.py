@@ -14,10 +14,14 @@ import time
 import torch
 import torch.distributed as dist
 
-try:
-    import wandb
-except ImportError:
-    wandb = None
+# wandb disabled: this server has no internet access, so we never record runs.
+# `wandb` is forced to None -> every guarded `wandb is not None` block below stays
+# inert. To re-enable later, restore the import and set disable_wandb: false.
+# try:
+#     import wandb
+# except ImportError:
+#     wandb = None
+wandb = None
 
 from omegaconf import OmegaConf
 
@@ -50,11 +54,12 @@ class Trainer:
             config.seed = random_seed.item()
         set_seed(config.seed + global_rank)
 
-        if self.is_main_process and not self.disable_wandb and wandb is not None:
-            wandb.login(host=config.wandb_host, key=config.wandb_key)
-            wandb.init(config=OmegaConf.to_container(config, resolve=True), name=config.config_name,
-                       mode="online", entity=config.wandb_entity, project=config.wandb_project,
-                       dir=config.wandb_save_dir)
+        # wandb disabled (offline server): no login / init.
+        # if self.is_main_process and not self.disable_wandb and wandb is not None:
+        #     wandb.login(host=config.wandb_host, key=config.wandb_key)
+        #     wandb.init(config=OmegaConf.to_container(config, resolve=True), name=config.config_name,
+        #                mode="online", entity=config.wandb_entity, project=config.wandb_project,
+        #                dir=config.wandb_save_dir)
 
         self.output_path = config.logdir
 
@@ -189,15 +194,16 @@ class Trainer:
                 self.save()
                 torch.cuda.empty_cache()
 
-            if self.is_main_process and not self.disable_wandb and wandb is not None:
-                wandb_loss_dict = {"critic_loss": critic_log_dict["critic_loss"].mean().item(),
-                                   "critic_grad_norm": critic_log_dict["critic_grad_norm"].mean().item()}
-                if train_generator:
-                    wandb_loss_dict.update({
-                        "generator_loss": generator_log_dict["generator_loss"].mean().item(),
-                        "generator_grad_norm": generator_log_dict["generator_grad_norm"].mean().item(),
-                        "dmdtrain_gradient_norm": generator_log_dict["dmdtrain_gradient_norm"].mean().item()})
-                wandb.log(wandb_loss_dict, step=self.step)
+            # wandb disabled (offline server): no metric logging.
+            # if self.is_main_process and not self.disable_wandb and wandb is not None:
+            #     wandb_loss_dict = {"critic_loss": critic_log_dict["critic_loss"].mean().item(),
+            #                        "critic_grad_norm": critic_log_dict["critic_grad_norm"].mean().item()}
+            #     if train_generator:
+            #         wandb_loss_dict.update({
+            #             "generator_loss": generator_log_dict["generator_loss"].mean().item(),
+            #             "generator_grad_norm": generator_log_dict["generator_grad_norm"].mean().item(),
+            #             "dmdtrain_gradient_norm": generator_log_dict["dmdtrain_gradient_norm"].mean().item()})
+            #     wandb.log(wandb_loss_dict, step=self.step)
 
             if self.step % self.config.gc_interval == 0:
                 gc.collect()
