@@ -100,6 +100,10 @@ def main():
     config = OmegaConf.merge(
         OmegaConf.load(os.path.join(here, "configs", "default_config.yaml")),
         OmegaConf.load(args.config_path))
+    # Allow the caller to point at a specific checkpoint (e.g. a given stage's
+    # latest checkpoint_model_XXXXXX/model.pt) without editing the config.
+    if args.generator_ckpt:
+        config.generator_ckpt = args.generator_ckpt
 
     device = torch.device("cuda")
     dtype = torch.bfloat16 if config.mixed_precision else torch.float32
@@ -158,6 +162,8 @@ def _parse_args():
     p = argparse.ArgumentParser(description="Streaming face-swap inference")
     p.add_argument("--config_path", default="configs/inference.yaml")
     p.add_argument("--dreamidv_root", required=True, help="DreamID-V repo root (for transforms/DWPose)")
+    p.add_argument("--generator_ckpt", default=None,
+                   help="Override config.generator_ckpt (e.g. a stage's latest checkpoint_model_XXXXXX/model.pt)")
     p.add_argument("--ckpt_dir", default=None, help="(unused placeholder for parity with teacher CLI)")
     p.add_argument("--ref_video", required=True)
     p.add_argument("--ref_image", required=True)
