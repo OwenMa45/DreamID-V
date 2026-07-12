@@ -62,15 +62,26 @@ class Trainer:
         # model + FSDP
         self.model = CausalDiffusion(config, device=self.device)
 
-        # Load the StageA init weights into the *un-wrapped* generator first. This
-        # is a purely local op; loading after FSDP-wrap goes through a full
-        # state-dict all-gather/scatter that can desync across ranks (NCCL watchdog
-        # timeout), especially when both ranks read a multi-GB ckpt off shared
-        # storage. Stage-2/3 already load before wrapping inside the model __init__.
-        if getattr(config, "generator_ckpt", False):
+        # Load weights into the *un-wrapped* generator first. This is a purely
+        # local op; loading after FSDP-wrap goes through a full state-dict
+        # all-gather/scatter that can desync across ranks (NCCL watchdog timeout),
+        # especially when both ranks read a multi-GB ckpt off shared storage.
+        #
+        # Resume logic: if an explicit resume_ckpt is given, or (by default) a
+        # checkpoint_model_XXXXXX already exists under logdir, we continue from
+        # that trained checkpoint instead of the StageA init -- so a re-run after
+        # an interruption picks up where it left off. Only the generator weights
+        # and the step index are restored (the AdamW moments restart; lr here is
+        # constant so there is no scheduler state to lose).
+        resume_path, resume_step = self._resolve_resume_ckpt(config)
+        init_ckpt = resume_path or (
+            config.generator_ckpt if getattr(config, "generator_ckpt", False) else None)
+        if init_ckpt:
             if self.is_main_process:
-                print(f"Loading init causal generator from {config.generator_ckpt}")
-            self.model.generator.load_checkpoint(config.generator_ckpt, strict=False)
+                tag = f"RESUME @ step {resume_step}" if resume_path else "init"
+                print(f"Loading {tag} causal generator from {init_ckpt}")
+            self.model.generator.load_checkpoint(init_ckpt, strict=False)
+        self.step = resume_step
 
         # Hard sync BEFORE the first FSDP collective. Without this, a rank that
         # finishes the (network-backed, multi-GB) T5/VAE/ckpt loading first races
@@ -109,6 +120,51 @@ class Trainer:
 
         self.max_grad_norm = getattr(config, "max_grad_norm", 10.0)
         self.previous_time = None
+
+    @staticmethod
+    def _step_from_ckpt(path):
+        # .../checkpoint_model_001000/model.pt -> 1000
+        name = os.path.basename(os.path.dirname(path))
+        try:
+            return int(name.rsplit("_", 1)[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    def _resolve_resume_ckpt(self, config):
+        """Return (model_pt_path, start_step) to resume from, else (None, 0).
+
+        Priority: explicit ``resume_ckpt`` (a dir or a model.pt) > auto-scan of
+        ``logdir`` for the highest ``checkpoint_model_XXXXXX``. Auto-resume is on
+        by default and can be turned off with ``auto_resume: false``.
+        """
+        explicit = getattr(config, "resume_ckpt", None)
+        if explicit:
+            path = explicit if str(explicit).endswith(".pt") else os.path.join(str(explicit), "model.pt")
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"resume_ckpt given but not found: {path}")
+            return path, self._step_from_ckpt(path)
+
+        if not bool(getattr(config, "auto_resume", True)):
+            return None, 0
+
+        logdir = getattr(config, "logdir", None)
+        best_path, best_step = None, -1
+        if logdir and os.path.isdir(logdir):
+            for name in os.listdir(logdir):
+                if not name.startswith("checkpoint_model_"):
+                    continue
+                p = os.path.join(logdir, name, "model.pt")
+                if not os.path.isfile(p):
+                    continue
+                try:
+                    s = int(name.rsplit("_", 1)[-1])
+                except (ValueError, IndexError):
+                    continue
+                if s > best_step:
+                    best_path, best_step = p, s
+        if best_path is not None:
+            return best_path, best_step
+        return None, 0
 
     def save(self):
         generator_state_dict = fsdp_state_dict(self.model.generator)

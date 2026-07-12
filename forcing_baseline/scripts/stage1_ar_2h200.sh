@@ -16,9 +16,16 @@ mkdir -p "${LOGDIR}"
 WANDB_FLAG=""
 [ "${DISABLE_WANDB:-0}" = "1" ] && WANDB_FLAG="--disable-wandb"
 
+# Resume control (default: auto-resume from latest ckpt in LOGDIR).
+#   RESUME_CKPT=/path/to/checkpoint_model_00XXXX -> resume from a specific ckpt.
+#   NO_AUTO_RESUME=1                             -> ignore existing ckpts, start fresh.
+RESUME_ARG=""
+[ -n "${RESUME_CKPT:-}" ] && RESUME_ARG="--resume-ckpt ${RESUME_CKPT}"
+[ "${NO_AUTO_RESUME:-0}" = "1" ] && RESUME_ARG="${RESUME_ARG} --no-auto-resume"
+
 torchrun --nproc_per_node="${NPROC}" --master_port=29511 \
   train.py \
   --config_path configs/ar_diffusion_2h200.yaml \
   --logdir "${LOGDIR}" \
   --wandb-save-dir "${LOGDIR}" \
-  ${WANDB_FLAG}
+  ${WANDB_FLAG} ${RESUME_ARG}

@@ -34,6 +34,11 @@ def main():
     parser.add_argument("--logdir", type=str, default="logs")
     parser.add_argument("--wandb-save-dir", type=str, default="")
     parser.add_argument("--disable-wandb", action="store_true")
+    # Resume control (Stage-1 diffusion trainer): point at a specific checkpoint
+    # dir / model.pt, or let it auto-resume from the latest ckpt in --logdir.
+    parser.add_argument("--resume-ckpt", type=str, default="")
+    parser.add_argument("--no-auto-resume", action="store_true",
+                        help="ignore existing checkpoints in --logdir and start fresh")
     args = parser.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +51,10 @@ def main():
     config.wandb_save_dir = args.wandb_save_dir
     if args.disable_wandb:
         config.disable_wandb = True
+    if args.resume_ckpt:
+        config.resume_ckpt = args.resume_ckpt
+    if args.no_auto_resume:
+        config.auto_resume = False
 
     trainer = build_trainer(config)
     trainer.train()
