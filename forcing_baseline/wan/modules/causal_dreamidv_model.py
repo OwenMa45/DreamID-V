@@ -47,6 +47,31 @@ __all__ = ["CausalDreamIDVModel"]
 flex_attention = torch.compile(flex_attention, dynamic=False, mode="default")
 
 
+# The flex-attention block masks depend only on the sequence geometry
+# (num_frames, frame_seqlen, block size, ...), never on the data, so they are
+# identical across the generator / EMA / teacher and across every step. Building
+# one is expensive: create_block_mask(_compile=False) materialises a dense
+# [Q, KV] mask and does an int64 .sum() over it (~32 GiB for a 21-frame TF
+# sequence at 78x78 latent). Stage-2 holds THREE causal models (student / EMA /
+# teacher), so each rebuilding its own mask means paying that spike 3x -- the 2nd
+# build OOMs. We instead build each unique mask ONCE and cache it, shared across
+# all model instances on the same device. The build stays on the GPU device (so
+# the mask_mod closure tensors live where flex-attention evaluates them at
+# compute time); only the first build pays the transient spike, which the run
+# has shown fits when memory is still free.
+_BLOCK_MASK_CACHE: dict = {}
+
+
+def _cached_block_mask(key, builder, device):
+    """Return a shared BlockMask for ``(key, device)``, building at most once."""
+    cache_key = (key, str(device))
+    cached = _BLOCK_MASK_CACHE.get(cache_key)
+    if cached is None:
+        cached = builder()
+        _BLOCK_MASK_CACHE[cache_key] = cached
+    return cached
+
+
 def causal_rope_apply(x, grid_sizes, freqs, start_frame=0):
     """RoPE that places the first local frame at absolute frame ``start_frame``.
 
@@ -443,22 +468,25 @@ class CausalDreamIDVModel(ModelMixin, ConfigMixin):
                                             independent_first_frame=True):
         total_length = num_frames * frame_seqlen
         padded_length = math.ceil(total_length / 128) * 128 - total_length
-        ends = torch.zeros(total_length + padded_length, device=device, dtype=torch.long)
+        seq = total_length + padded_length
 
-        _, blk_end = cls._block_partition(num_frames, num_frame_per_block, independent_first_frame)
-        for fidx in range(num_frames):
-            s = fidx * frame_seqlen
-            ends[s:s + frame_seqlen] = blk_end[fidx] * frame_seqlen
+        def _build():
+            ends = torch.zeros(seq, device=device, dtype=torch.long)
+            _, blk_end = cls._block_partition(num_frames, num_frame_per_block, independent_first_frame)
+            for fidx in range(num_frames):
+                s = fidx * frame_seqlen
+                ends[s:s + frame_seqlen] = blk_end[fidx] * frame_seqlen
 
-        def attention_mask(b, h, q_idx, kv_idx):
-            if local_attn_size == -1:
-                return (kv_idx < ends[q_idx]) | (q_idx == kv_idx)
-            return ((kv_idx < ends[q_idx]) & (kv_idx >= (ends[q_idx] - local_attn_size * frame_seqlen))) | (q_idx == kv_idx)
+            def attention_mask(b, h, q_idx, kv_idx):
+                if local_attn_size == -1:
+                    return (kv_idx < ends[q_idx]) | (q_idx == kv_idx)
+                return ((kv_idx < ends[q_idx]) & (kv_idx >= (ends[q_idx] - local_attn_size * frame_seqlen))) | (q_idx == kv_idx)
 
-        block_mask = create_block_mask(attention_mask, B=None, H=None,
-                                       Q_LEN=total_length + padded_length,
-                                       KV_LEN=total_length + padded_length,
-                                       _compile=False, device=device)
+            return create_block_mask(attention_mask, B=None, H=None,
+                                     Q_LEN=seq, KV_LEN=seq, _compile=False, device=device)
+
+        key = ("bc", num_frames, frame_seqlen, num_frame_per_block, local_attn_size, independent_first_frame)
+        block_mask = _cached_block_mask(key, _build, device)
         if not dist.is_initialized() or dist.get_rank() == 0:
             print(f"[causal-dreamidv] block-causal mask, block={num_frame_per_block} frames")
         return block_mask
@@ -474,40 +502,43 @@ class CausalDreamIDVModel(ModelMixin, ConfigMixin):
         total_length = num_frames * frame_seqlen * 2
         padded_length = math.ceil(total_length / 128) * 128 - total_length
         clean_ends = num_frames * frame_seqlen
+        seq = total_length + padded_length
 
-        context_ends = torch.zeros(total_length + padded_length, device=device, dtype=torch.long)
-        noise_noise_starts = torch.zeros(total_length + padded_length, device=device, dtype=torch.long)
-        noise_noise_ends = torch.zeros(total_length + padded_length, device=device, dtype=torch.long)
-        noise_context_ends = torch.zeros(total_length + padded_length, device=device, dtype=torch.long)
+        def _build():
+            context_ends = torch.zeros(seq, device=device, dtype=torch.long)
+            noise_noise_starts = torch.zeros(seq, device=device, dtype=torch.long)
+            noise_noise_ends = torch.zeros(seq, device=device, dtype=torch.long)
+            noise_context_ends = torch.zeros(seq, device=device, dtype=torch.long)
 
-        blk_start, blk_end = cls._block_partition(num_frames, num_frame_per_block, independent_first_frame)
+            blk_start, blk_end = cls._block_partition(num_frames, num_frame_per_block, independent_first_frame)
 
-        # clean half
-        for fidx in range(num_frames):
-            s = fidx * frame_seqlen
-            context_ends[s:s + frame_seqlen] = blk_end[fidx] * frame_seqlen
+            # clean half
+            for fidx in range(num_frames):
+                s = fidx * frame_seqlen
+                context_ends[s:s + frame_seqlen] = blk_end[fidx] * frame_seqlen
 
-        # noisy half (offset by clean_ends)
-        for fidx in range(num_frames):
-            s = clean_ends + fidx * frame_seqlen
-            e = s + frame_seqlen
-            noise_noise_starts[s:e] = clean_ends + blk_start[fidx] * frame_seqlen
-            noise_noise_ends[s:e] = clean_ends + blk_end[fidx] * frame_seqlen
-            # clean context = clean frames strictly before this noisy block
-            noise_context_ends[s:e] = blk_start[fidx] * frame_seqlen
+            # noisy half (offset by clean_ends)
+            for fidx in range(num_frames):
+                s = clean_ends + fidx * frame_seqlen
+                e = s + frame_seqlen
+                noise_noise_starts[s:e] = clean_ends + blk_start[fidx] * frame_seqlen
+                noise_noise_ends[s:e] = clean_ends + blk_end[fidx] * frame_seqlen
+                # clean context = clean frames strictly before this noisy block
+                noise_context_ends[s:e] = blk_start[fidx] * frame_seqlen
 
-        def attention_mask(b, h, q_idx, kv_idx):
-            clean_mask = (q_idx < clean_ends) & (kv_idx < context_ends[q_idx])
-            C1 = (kv_idx < noise_noise_ends[q_idx]) & (kv_idx >= noise_noise_starts[q_idx])
-            C2 = kv_idx < noise_context_ends[q_idx]
-            noise_mask = (q_idx >= clean_ends) & (C1 | C2)
-            eye_mask = q_idx == kv_idx
-            return eye_mask | clean_mask | noise_mask
+            def attention_mask(b, h, q_idx, kv_idx):
+                clean_mask = (q_idx < clean_ends) & (kv_idx < context_ends[q_idx])
+                C1 = (kv_idx < noise_noise_ends[q_idx]) & (kv_idx >= noise_noise_starts[q_idx])
+                C2 = kv_idx < noise_context_ends[q_idx]
+                noise_mask = (q_idx >= clean_ends) & (C1 | C2)
+                eye_mask = q_idx == kv_idx
+                return eye_mask | clean_mask | noise_mask
 
-        block_mask = create_block_mask(attention_mask, B=None, H=None,
-                                       Q_LEN=total_length + padded_length,
-                                       KV_LEN=total_length + padded_length,
-                                       _compile=False, device=device)
+            return create_block_mask(attention_mask, B=None, H=None,
+                                     Q_LEN=seq, KV_LEN=seq, _compile=False, device=device)
+
+        key = ("tf", num_frames, frame_seqlen, num_frame_per_block, independent_first_frame)
+        block_mask = _cached_block_mask(key, _build, device)
         if not dist.is_initialized() or dist.get_rank() == 0:
             print(f"[causal-dreamidv] teacher-forcing mask, block={num_frame_per_block} frames")
         return block_mask

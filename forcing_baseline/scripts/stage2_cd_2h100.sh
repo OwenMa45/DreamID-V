@@ -15,6 +15,9 @@ mkdir -p "${LOGDIR}"
 
 export DIST_TIMEOUT_MIN=${DIST_TIMEOUT_MIN:-120}
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+# Reduce allocator fragmentation (Stage-2 holds student+EMA+teacher+text-encoder);
+# lets the one-off flex-attention mask build reclaim reserved-but-unallocated blocks.
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
 # wandb is configured (key/project) inside configs/causal_cd_2h100.yaml.
 # Set DISABLE_WANDB=1 to turn logging off without editing the config.
