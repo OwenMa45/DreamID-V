@@ -86,8 +86,12 @@ def _preprocess(args, vae, device, dtype):
                       Normalize(0.5, 0.5), Rearrange("t c h w -> c t h w")])
     img_ref = _encode_clip(vae, [img], img_tf, device, dtype)         # [16, 1, h, w]
 
-    y = torch.cat([video_lat, mask_lat], dim=0).unsqueeze(0)          # [1, 32, F, h, w]
-    img_ref = img_ref.unsqueeze(0)                                    # [1, 16, 1, h, w]
+    # The VAE wrapper returns fp32 latents (encode_to_latent -> .float()), but the
+    # generator runs in bf16 at inference (no FSDP MixedPrecision to auto-cast the
+    # forward inputs like in training). Cast the conditioning to the model dtype so
+    # ref_conv / patch_embedding (bf16 weights) don't hit a float/bf16 mismatch.
+    y = torch.cat([video_lat, mask_lat], dim=0).unsqueeze(0).to(dtype)   # [1, 32, F, h, w]
+    img_ref = img_ref.unsqueeze(0).to(dtype)                             # [1, 16, 1, h, w]
     return y, img_ref
 
 
