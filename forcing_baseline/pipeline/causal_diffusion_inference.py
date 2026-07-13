@@ -121,8 +121,12 @@ class CausalDiffusionInferencePipeline(torch.nn.Module):
             current_start=cur)
         flow_pred = flow_pred_uncond + self.guidance_scale * (flow_pred_cond - flow_pred_uncond)
 
+        # Pass the per-element timestep (flattened to match flow_pred/noisy_input
+        # [B*chunksize, ...]) rather than the 0-dim scalar `t`: scheduler.step does
+        # timestep.unsqueeze(1), which errors on a 0-dim tensor. `timestep` is
+        # [B, chunksize] and step() flattens ndim==2 internally.
         latents = self.scheduler.step(
-            flow_pred.flatten(0, 1), t, noisy_input.flatten(0, 1)
+            flow_pred.flatten(0, 1), timestep.flatten(0, 1), noisy_input.flatten(0, 1)
         ).unflatten(0, (batch_size, chunksize))
         return latents
 

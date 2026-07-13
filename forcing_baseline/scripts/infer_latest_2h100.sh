@@ -80,13 +80,17 @@ for st in ${STAGES}; do
   step="$(basename "${latest}" | sed 's/checkpoint_model_//')"
   echo "[infer][stage${st}] latest ckpt: ${ckpt} (step ${step})"
 
+  # Per-stage output subfolder: outputs/stage1/, outputs/stage2/, outputs/stage3/.
+  stage_out="${OUT_DIR}/stage${st}"
+  mkdir -p "${stage_out}"
+
   i=0
   for ref in "${REFS[@]}"; do
     base="${ref%_ref.jpg}"
     video="${base}.mp4"
     mask="${base}_mask.mp4"
     name="$(basename "${base}")"
-    save="${OUT_DIR}/${SNAME[$st]}_step${step}_g$(printf '%02d' "${i}")_${name}.mp4"
+    save="${stage_out}/${SNAME[$st]}_step${step}_g$(printf '%02d' "${i}")_${name}.mp4"
     i=$((i + 1))
     if [ ! -f "${video}" ] || [ ! -f "${mask}" ]; then
       echo "  [skip] missing video/mask for ${name}"
