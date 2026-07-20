@@ -24,9 +24,17 @@ export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:Tr
 WANDB_FLAG=""
 [ "${DISABLE_WANDB:-0}" = "1" ] && WANDB_FLAG="--disable-wandb"
 
+# Resume control (default: auto-resume student/EMA from latest ckpt in LOGDIR;
+# the frozen teacher always keeps its Stage-1 init).
+#   RESUME_CKPT=/path/to/checkpoint_model_00XXXX -> resume from a specific ckpt.
+#   NO_AUTO_RESUME=1                             -> ignore existing ckpts, start fresh.
+RESUME_ARG=""
+[ -n "${RESUME_CKPT:-}" ] && RESUME_ARG="--resume-ckpt ${RESUME_CKPT}"
+[ "${NO_AUTO_RESUME:-0}" = "1" ] && RESUME_ARG="${RESUME_ARG} --no-auto-resume"
+
 torchrun --nproc_per_node="${NPROC}" --master_port=29532 \
   train.py \
   --config_path configs/causal_cd_2h100.yaml \
   --logdir "${LOGDIR}" \
   --wandb-save-dir "${LOGDIR}" \
-  ${WANDB_FLAG}
+  ${WANDB_FLAG} ${RESUME_ARG}

@@ -137,7 +137,11 @@ class DreamIDVDiffusionWrapper(torch.nn.Module):
                 break
         fixed = {}
         for k, v in sd.items():
-            k = k.replace("model._fsdp_wrapped_module.", "model.")
+            # Stage-2/3 EMA shadows are collected AFTER FSDP auto-wrap, so their
+            # keys carry `_fsdp_wrapped_module.` on inner submodules too (e.g.
+            # `model.blocks.0._fsdp_wrapped_module.self_attn...`). Strip the
+            # mangling everywhere, not just at the wrapper root.
+            k = k.replace("_fsdp_wrapped_module.", "")
             if k.startswith("model."):
                 k = k[len("model."):]
             fixed[k] = v

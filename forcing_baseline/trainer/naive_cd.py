@@ -61,6 +61,44 @@ class Trainer:
         self.output_path = config.logdir
 
         self.model = NaiveConsistency(config, device=self.device)
+
+        # ---- Stage-2 resume -------------------------------------------------
+        # Continue the STUDENT (+EMA) from the latest Stage-2 checkpoint in logdir
+        # (or an explicit resume_ckpt); the TEACHER keeps its Stage-1 init -- it is
+        # the frozen AR teacher and must not drift. Stage-2 ckpts saved past
+        # ema_start_step contain only the EMA shadow ("generator_ema"), so the
+        # student restarts from the EMA weights (closest available to the raw
+        # student). All loads happen on the *un-wrapped* modules, before FSDP.
+        resume_path, resume_step = self._resolve_resume_ckpt(config)
+        self._resume_shadow = None
+        if resume_path:
+            if self.is_main_process:
+                print(f"[naive_cd] RESUME @ step {resume_step} from {resume_path} "
+                      "(student+EMA from ckpt; teacher keeps Stage-1 init)")
+            sd = torch.load(resume_path, map_location="cpu")
+            if isinstance(sd, dict) and "generator" in sd:
+                payload = sd["generator"]
+            elif isinstance(sd, dict) and "generator_ema" in sd:
+                payload = sd["generator_ema"]
+            else:
+                payload = sd
+            if isinstance(sd, dict) and "generator_ema" in sd:
+                # raw (possibly FSDP-mangled) keys, used to restore the EMA shadow
+                self._resume_shadow = sd["generator_ema"]
+            clean = {}
+            for k, v in payload.items():
+                k = k.replace("_fsdp_wrapped_module.", "")
+                if k.startswith("model."):
+                    k = k[len("model."):]
+                clean[k] = v
+            missing, unexpected = self.model.generator.model.load_state_dict(clean, strict=False)
+            self.model.generator_ema.model.load_state_dict(clean, strict=False)
+            if self.is_main_process:
+                print(f"[naive_cd] resumed student weights: {len(missing)} missing, "
+                      f"{len(unexpected)} unexpected")
+            del sd, payload, clean
+            self.step = resume_step
+
         # Sync after the (network-backed) ckpt/T5/VAE loading inside the model ctor,
         # before any FSDP collective, so a fast rank does not race into the first
         # all-gather while a slow rank is still reading from shared storage
@@ -100,9 +138,81 @@ class Trainer:
 
         ema_weight = getattr(config, "ema_weight", 0.95)
         self.generator_ema = EMA_FSDP(self.model.generator, decay=ema_weight)
+        # On resume, continue the EMA target from the saved shadow rather than
+        # re-initialising it from the (already EMA-valued) student weights.
+        if self._resume_shadow is not None:
+            self._restore_ema_shadow(self._resume_shadow)
+            self._resume_shadow = None
 
         self.max_grad_norm_generator = getattr(config, "max_grad_norm_generator", 10.0)
         self.previous_time = None
+
+    # ---- resume helpers ----------------------------------------------------
+    @staticmethod
+    def _step_from_ckpt(path):
+        # .../checkpoint_model_001000/model.pt -> 1000
+        name = os.path.basename(os.path.dirname(path))
+        try:
+            return int(name.rsplit("_", 1)[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    def _resolve_resume_ckpt(self, config):
+        """Return (model_pt_path, start_step) to resume from, else (None, 0).
+
+        Priority: explicit ``resume_ckpt`` (a dir or a model.pt) > auto-scan of
+        ``logdir`` for the highest ``checkpoint_model_XXXXXX``. Auto-resume is on
+        by default and can be turned off with ``auto_resume: false``.
+        """
+        explicit = getattr(config, "resume_ckpt", None)
+        if explicit:
+            path = explicit if str(explicit).endswith(".pt") else os.path.join(str(explicit), "model.pt")
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"resume_ckpt given but not found: {path}")
+            return path, self._step_from_ckpt(path)
+
+        if not bool(getattr(config, "auto_resume", True)):
+            return None, 0
+
+        logdir = getattr(config, "logdir", None)
+        best_path, best_step = None, -1
+        if logdir and os.path.isdir(logdir):
+            for name in os.listdir(logdir):
+                if not name.startswith("checkpoint_model_"):
+                    continue
+                p = os.path.join(logdir, name, "model.pt")
+                if not os.path.isfile(p):
+                    continue
+                try:
+                    s = int(name.rsplit("_", 1)[-1])
+                except (ValueError, IndexError):
+                    continue
+                if s > best_step:
+                    best_path, best_step = p, s
+        if best_path is not None:
+            return best_path, best_step
+        return None, 0
+
+    def _restore_ema_shadow(self, saved):
+        """Copy a saved EMA shadow into the freshly-initialised EMA_FSDP shadow.
+
+        Keys are matched after stripping FSDP's ``_fsdp_wrapped_module.`` mangling
+        so shadows saved by this run's convention (post-wrap names) and any clean
+        variant both restore correctly. Unmatched entries keep their init value.
+        """
+        def _clean(k):
+            return k.replace("_fsdp_wrapped_module.", "")
+
+        current = self.generator_ema.shadow
+        by_clean = {_clean(k): k for k in current}
+        matched = 0
+        for k, v in saved.items():
+            tgt = by_clean.get(_clean(k))
+            if tgt is not None:
+                current[tgt] = v.detach().clone().float().cpu()
+                matched += 1
+        if self.is_main_process:
+            print(f"[naive_cd] EMA shadow restored: {matched}/{len(current)} tensors")
 
     def save(self):
         generator_state_dict = fsdp_state_dict(self.model.generator)
