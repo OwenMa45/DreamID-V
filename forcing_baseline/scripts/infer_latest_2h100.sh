@@ -15,6 +15,9 @@
 #   bash scripts/infer_latest_2h100.sh              # all stages that have ckpts
 #   STAGES=1 bash scripts/infer_latest_2h100.sh     # only stage 1
 #   NUM_GROUPS=5 bash scripts/infer_latest_2h100.sh # first 5 groups
+#   STAGES=3 CKPT_STEP=500 bash scripts/infer_latest_2h100.sh
+#       -> pin a specific step instead of the latest (e.g. the stage-3 DMD
+#          deliverable is the step-500 ckpt of the 1000-step run)
 set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-/inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline}
@@ -70,10 +73,15 @@ for st in ${STAGES}; do
     echo "[infer][stage${st}] unknown stage id -- skipping."
     continue
   fi
-  latest="$(ls -d "${dir}"/checkpoint_model_*/ 2>/dev/null | sort | tail -n 1 || true)"
-  latest="${latest%/}"
+  if [ -n "${CKPT_STEP:-}" ]; then
+    # pin a specific step (e.g. CKPT_STEP=500 -> checkpoint_model_000500)
+    latest="${dir}/checkpoint_model_$(printf '%06d' "${CKPT_STEP}")"
+  else
+    latest="$(ls -d "${dir}"/checkpoint_model_*/ 2>/dev/null | sort | tail -n 1 || true)"
+    latest="${latest%/}"
+  fi
   if [ -z "${latest}" ] || [ ! -f "${latest}/model.pt" ]; then
-    echo "[infer][stage${st}] no checkpoint under ${dir} -- skipping."
+    echo "[infer][stage${st}] no usable checkpoint (${latest:-none}) under ${dir} -- skipping."
     continue
   fi
   ckpt="${latest}/model.pt"

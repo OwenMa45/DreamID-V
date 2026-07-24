@@ -48,15 +48,18 @@ batch_size: 1                  # per-GPU; 2 GPUs -> effective batch 2
 num_workers: 4
 ema_weight: 0.99
 ema_start_step: 200
-log_iters: 1000
+log_iters: 100                 # checkpoint every 100 steps -> ckpts at 100/200/.../1000
 gradient_checkpointing: true
 
 # --- run control & wandb logging ---
-# NOTE: max_steps counts TOTAL iterations (= critic updates). With
-# dfake_gen_update_ratio=5 the GENERATOR is updated every 5th step, so
-# max_steps=5000 -> only ~1000 generator updates. Raise to ~25000 if you want
-# the generator to see ~5000 updates like Stage-1/2.
-max_steps: 5000
+# Short DMD run (over-training DMD degrades diversity/quality): 1000 TOTAL
+# iterations (= critic updates). With dfake_gen_update_ratio=5 the GENERATOR is
+# updated every 5th step -> ~200 generator updates. Inference is pinned to the
+# step-500 checkpoint in configs/inference_2h100.yaml.
+# NOTE: ckpts at step 100/200 store raw "generator"; from step 300 on (past
+# ema_start_step=200) they store the EMA shadow "generator_ema" -- the loader
+# (utils/dreamidv_wrapper.load_checkpoint) handles both.
+max_steps: 1000
 disable_wandb: true            # offline server: wandb fully disabled (also hard-off in code)
 # wandb_key: <removed -- no internet access on this server>
 wandb_entity: null

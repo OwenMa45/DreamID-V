@@ -7,8 +7,9 @@ vae_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.
 t5_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/models_t5_umt5-xxl-enc-bf16.pth
 t5_tokenizer: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/google/umt5-xxl
 
-# final distilled generator = Stage-3 (2xH100) DMD final ckpt (max_steps=5000 -> checkpoint_model_005000).
-generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/chunkwise/stage3_dmd_2h100/checkpoint_model_005000/model.pt
+# final distilled generator = Stage-3 (2xH100) DMD step-500 ckpt (mid-run EMA;
+# DMD over-trains easily, step 500 of the 1000-step run is the chosen deliverable).
+generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/chunkwise/stage3_dmd_2h100/checkpoint_model_000500/model.pt
 
 denoising_step_list:
 - 1000

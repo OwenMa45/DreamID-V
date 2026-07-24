@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Streaming face-swap inference with the distilled causal generator (single GPU).
-# Generator = Stage-3 (2xH100) final ckpt; with max_steps=5000 that is fixed at
-# checkpoints/chunkwise/stage3_dmd_2h100/checkpoint_model_005000/model.pt
+# Generator = Stage-3 (2xH100) step-500 DMD ckpt (1000-step run, ckpt every 100):
+# checkpoints/chunkwise/stage3_dmd_2h100/checkpoint_model_000500/model.pt
 # (already baked into configs/inference_2h100.yaml, no manual edit needed).
 set -euo pipefail
 
