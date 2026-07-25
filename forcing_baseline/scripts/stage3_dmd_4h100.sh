@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Stage-3 (4xH100): DMD distillation -> final few-step streaming face-swapper.
-# Init = Stage-2 final ckpt; with max_steps=5000 that is fixed at
-# checkpoints/chunkwise/stage2_cd_4h100/checkpoint_model_005000/model.pt
+# Init = Stage-2 final ckpt (trained on 2xH100):
+# checkpoints/chunkwise/stage2_cd_2h100/checkpoint_model_005000/model.pt
 # (already baked into configs/dmd_4h100.yaml, no manual edit needed).
-# NOTE: this stage holds 3 DiT models (generator + real_score + fake_score);
-#       keep gradient_checkpointing=true. FSDP full-shard across 4xH100 (80GB)
-#       gives lower per-GPU memory than 2 GPUs, so it fits comfortably.
+# 1000 steps, ckpt every 100; the step-500 ckpt is the inference deliverable.
+# NOTE: this stage holds 3 DiT models (generator + real_score + fake_score) plus
+#       the per-GPU Self-Forcing rollout activations that do NOT shard; 4-way
+#       FSDP halves the static shards vs 2 GPUs, giving the needed headroom.
 set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-/inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline}
@@ -15,6 +16,11 @@ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3}
 NPROC=${NPROC:-4}
 LOGDIR=${LOGDIR:-checkpoints/chunkwise/stage3_dmd_4h100}
 mkdir -p "${LOGDIR}"
+
+export DIST_TIMEOUT_MIN=${DIST_TIMEOUT_MIN:-120}
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+# Reduce allocator fragmentation; critical here given the rollout memory spikes.
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 
 # wandb is configured (key/project) inside configs/dmd_4h100.yaml.
 # Set DISABLE_WANDB=1 to turn logging off without editing the config.

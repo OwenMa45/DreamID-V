@@ -13,8 +13,10 @@ t5_tokenizer: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-
 vae_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/Wan2.1_VAE.pth
 data_path: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/dataset/swap_latents
 
-# generator init = Stage-2 (4xH100) CD final ckpt (max_steps=5000 -> checkpoint_model_005000).
-generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/chunkwise/stage2_cd_4h100/checkpoint_model_005000/model.pt
+# generator init = Stage-2 CD final ckpt. NOTE: Stage-1/2 were actually trained
+# on the 2xH100 machine, so this points at the *_2h100 checkpoint chain (only
+# Stage-3 moves to 4 GPUs for memory headroom).
+generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/chunkwise/stage2_cd_2h100/checkpoint_model_005000/model.pt
 # real/fake score = bidirectional DreamID-V-Faster teacher weights
 real_score_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/DreamID-V/dreamidv_faster.pth
 fake_score_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/DreamID-V/dreamidv_faster.pth
@@ -45,17 +47,22 @@ beta2: 0.999
 beta1_critic: 0.0
 beta2_critic: 0.999
 batch_size: 1                  # per-GPU; 4 GPUs -> effective batch 4
+num_workers: 4
 ema_weight: 0.99
 ema_start_step: 200
-log_iters: 1000
+log_iters: 100                 # checkpoint every 100 steps -> ckpts at 100/200/.../1000
 gradient_checkpointing: true
 
+# Offload the (frozen) umt5-xxl fp32 shards to CPU: saves ~5-11 GB/GPU of static
+# memory at the cost of streaming its params once per step (prompt is fixed).
+text_encoder_cpu_offload: true
+
 # --- run control & wandb logging ---
-# NOTE: max_steps counts TOTAL iterations (= critic updates). With
-# dfake_gen_update_ratio=5 the GENERATOR is updated every 5th step, so
-# max_steps=5000 -> only ~1000 generator updates. Raise to ~25000 if you want
-# the generator to see ~5000 updates like Stage-1/2.
-max_steps: 5000
+# Short DMD run (over-training DMD degrades diversity/quality): 1000 TOTAL
+# iterations (= critic updates). With dfake_gen_update_ratio=5 the GENERATOR is
+# updated every 5th step -> ~200 generator updates. The step-500 ckpt is the
+# inference deliverable.
+max_steps: 1000
 disable_wandb: true            # offline server: wandb fully disabled (also hard-off in code)
 # wandb_key: <removed -- no internet access on this server>
 wandb_entity: null

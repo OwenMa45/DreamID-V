@@ -49,11 +49,12 @@ for f in yolox_l.onnx dw-ll_ucoco_384.onnx; do
   fi
 done
 
-# Stage -> (logdir, short name). Add other hardware dirs here if needed.
+# Stage -> (logdir, short name). Override per stage via env if a stage was
+# trained on different hardware, e.g. STAGE3_DIR=checkpoints/chunkwise/stage3_dmd_4h100.
 declare -A LOGDIR=(
-  [1]="checkpoints/chunkwise/stage1_ar_2h100"
-  [2]="checkpoints/chunkwise/stage2_cd_2h100"
-  [3]="checkpoints/chunkwise/stage3_dmd_2h100"
+  [1]="${STAGE1_DIR:-checkpoints/chunkwise/stage1_ar_2h100}"
+  [2]="${STAGE2_DIR:-checkpoints/chunkwise/stage2_cd_2h100}"
+  [3]="${STAGE3_DIR:-checkpoints/chunkwise/stage3_dmd_2h100}"
 )
 declare -A SNAME=( [1]="stage1_ar" [2]="stage2_cd" [3]="stage3_dmd" )
 

@@ -245,9 +245,17 @@ class DreamIDVDiffusionWrapper(torch.nn.Module):
             ph, pw = self.model.patch_size[1], self.model.patch_size[2]
             f0, h0, w0 = x_list[0].shape[1], x_list[0].shape[2], x_list[0].shape[3]
             bidir_seq_len = (h0 // ph) * (w0 // pw) * f0
-            out = self.model(
-                x_list, t=input_timestep, context=ctx_list, seq_len=bidir_seq_len,
-                img_ref=ref_list, y=y_list)
+            # The original WanModel deliberately feeds fp32 activations into its
+            # attention/ffn linears (`self.norm1(x).float() * (1 + e[1]) + e[0]`)
+            # and relies on running under bf16 autocast -- exactly how the official
+            # pipeline and our Stage-0 teacher invoke it. Without autocast,
+            # F.linear(fp32 x, bf16 weight) raises "mat1 and mat2 must have the
+            # same dtype", so restore that context here (covers both the frozen
+            # real_score and the trainable fake_score; autocast is autograd-safe).
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = self.model(
+                    x_list, t=input_timestep, context=ctx_list, seq_len=bidir_seq_len,
+                    img_ref=ref_list, y=y_list)
             out = torch.stack(out)                                       # [B, C, F, h, w]
             flow_pred = out.permute(0, 2, 1, 3, 4)
 
