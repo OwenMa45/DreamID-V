@@ -25,6 +25,7 @@ timestep_shift: 8.0
 
 lr: 1.0e-05
 batch_size: 1                  # per-GPU; 4 GPUs -> effective batch 4
+num_workers: 4                 # per-rank DataLoader workers (LMDB env opened lazily per worker)
 ema_weight: 0.0
 ema_start_step: 1000000
 log_iters: 1000

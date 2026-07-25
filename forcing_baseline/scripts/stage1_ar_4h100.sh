@@ -11,6 +11,11 @@ NPROC=${NPROC:-4}
 LOGDIR=${LOGDIR:-checkpoints/chunkwise/stage1_ar_4h100}
 mkdir -p "${LOGDIR}"
 
+# Tolerate slow first-reads off shared storage; reduce allocator fragmentation.
+export DIST_TIMEOUT_MIN=${DIST_TIMEOUT_MIN:-120}
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+
 # wandb is configured (key/project) inside configs/ar_diffusion_4h100.yaml.
 # Set DISABLE_WANDB=1 to turn logging off without editing the config.
 WANDB_FLAG=""
