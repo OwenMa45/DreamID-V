@@ -288,14 +288,24 @@ class CausalWanCrossAttention(nn.Module):
         q = self.norm_q(self.q(x)).view(b, -1, n, d)
         if crossattn_cache is not None:
             if not crossattn_cache["is_init"]:
-                k = self.norm_k(self.k(context)).view(b, -1, n, d)
-                v = self.v(context).view(b, -1, n, d)
-                crossattn_cache["k"][:, :k.shape[1]] = k
-                crossattn_cache["v"][:, :v.shape[1]] = v
+                # First call for this cache: project the (rollout-constant) text
+                # context and store it. Done under no_grad and then READ BACK from
+                # the cache so this call is branch-stable w.r.t. activation
+                # checkpointing: a checkpointed recompute will find is_init=True
+                # and take the read path, and because the init compute saves no
+                # autograd tensors, forward and recompute pack the exact same
+                # tensor count (otherwise: "A different number of tensors was
+                # saved during the original forward and recomputation"). Grad-wise
+                # nothing is lost -- cached context K/V are constants from the
+                # second call onward anyway; only q/o keep gradients here.
+                with torch.no_grad():
+                    k_init = self.norm_k(self.k(context)).view(b, -1, n, d)
+                    v_init = self.v(context).view(b, -1, n, d)
+                    crossattn_cache["k"][:, :k_init.shape[1]] = k_init
+                    crossattn_cache["v"][:, :v_init.shape[1]] = v_init
                 crossattn_cache["is_init"] = True
-            else:
-                k = crossattn_cache["k"][:, :context.shape[1]]
-                v = crossattn_cache["v"][:, :context.shape[1]]
+            k = crossattn_cache["k"][:, :context.shape[1]]
+            v = crossattn_cache["v"][:, :context.shape[1]]
         else:
             k = self.norm_k(self.k(context)).view(b, -1, n, d)
             v = self.v(context).view(b, -1, n, d)
