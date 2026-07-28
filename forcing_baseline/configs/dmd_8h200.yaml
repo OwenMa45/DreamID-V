@@ -1,0 +1,76 @@
+# Stage-3 (8-GPU node, H200/H100): DMD distillation -> final few-step streaming face-swapper.
+#   generator  = causal student (init from Stage-2 CD)
+#   real_score = bidirectional DreamID-V-Faster teacher (frozen)
+#   fake_score = bidirectional critic (trainable, init from teacher)
+# CFG acts on img_ref (cond = real reference face / uncond = zeroed reference).
+# Merged ON TOP of default_config.yaml.
+trainer: distillation
+distribution_loss: dmd
+
+# --- run-machine absolute paths ---
+t5_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/models_t5_umt5-xxl-enc-bf16.pth
+t5_tokenizer: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/google/umt5-xxl
+vae_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/Wan2.1_VAE.pth
+data_path: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/dataset/swap_latents
+
+# generator init = Stage-2 CD final ckpt. NOTE: checkpoints are hardware-
+# independent -- Stage-2 was actually trained on the 2xH100 machine, so this
+# points at the *_2h100 artifact you already have. If you re-run Stage-2 on this
+# 8-GPU node, switch to stage2_cd_8h200 instead.
+generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/chunkwise/stage2_cd_2h100/checkpoint_model_005000/model.pt
+# real/fake score = bidirectional DreamID-V-Faster teacher weights
+real_score_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/DreamID-V/dreamidv_faster.pth
+fake_score_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/DreamID-V/dreamidv_faster.pth
+
+sharding_strategy: full
+
+denoising_step_list:
+- 1000
+- 750
+- 500
+- 250
+warp_denoising_step: true
+
+num_train_timestep: 1000
+timestep_shift: 8.0
+denoising_loss_type: flow
+real_guidance_scale: 5.0
+fake_guidance_scale: 0.0
+ts_schedule: true
+ts_schedule_max: false
+min_score_timestep: 0
+dfake_gen_update_ratio: 5
+
+lr: 2.0e-06
+lr_critic: 4.0e-07
+beta1: 0.0
+beta2: 0.999
+beta1_critic: 0.0
+beta2_critic: 0.999
+batch_size: 1                  # per-GPU; 8 GPUs -> effective batch 8
+num_workers: 4
+ema_weight: 0.99
+ema_start_step: 200
+log_iters: 100                 # checkpoint every 100 steps -> ckpts at 100/200/.../1000
+gradient_checkpointing: true
+
+# 8-way sharding keeps static memory small (~9 GB/GPU), so the frozen umt5-xxl
+# can stay on GPU (no per-step CPU->GPU streaming). Set true only if you hit OOM.
+text_encoder_cpu_offload: false
+
+# --- run control & wandb logging ---
+# Short DMD run (over-training DMD degrades diversity/quality): 1000 TOTAL
+# iterations (= critic updates). With dfake_gen_update_ratio=5 the GENERATOR is
+# updated every 5th step -> ~200 generator updates. The step-500 ckpt is the
+# inference deliverable.
+# NOTE: ckpts at step 100/200 store raw "generator"; from step 300 on (past
+# ema_start_step=200) they store the EMA shadow "generator_ema" -- the loader
+# (utils/dreamidv_wrapper.load_checkpoint) handles both.
+max_steps: 1000
+disable_wandb: true            # offline server: wandb fully disabled (also hard-off in code)
+# wandb_key: <removed -- no internet access on this server>
+wandb_entity: null
+wandb_project: dreamidv_causal_forcing
+
+# ID / ArcFace loss interface (disabled: DreamID-V ships no ArcFace head)
+lambda_id: 0.0

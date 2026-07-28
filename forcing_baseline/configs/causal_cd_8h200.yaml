@@ -1,0 +1,49 @@
+# Stage-2 (8-GPU node, H200/H100): causal genuine Consistency Distillation (CD).
+# Only ground-truth swap latents are needed; the frozen causal teacher performs
+# the AR one-step transition (img_ref CFG), student & EMA must stay consistent.
+# Merged ON TOP of default_config.yaml.
+trainer: consistency_distillation
+
+# --- run-machine absolute paths ---
+t5_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/models_t5_umt5-xxl-enc-bf16.pth
+t5_tokenizer: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/google/umt5-xxl
+vae_checkpoint: /inspire/hdd/global_user/liumingyu-253208120284/lzk/models/wan2.1-t2v-1.3b/Wan2.1_VAE.pth
+data_path: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/dataset/swap_latents
+
+# student / teacher / EMA all initialised from the Stage-1 final ckpt.
+# NOTE: checkpoints are hardware-independent -- Stage-1 was actually trained on
+# the 2xH100 machine, so this points at the *_2h100 artifact you already have.
+# If you re-run Stage-1 on this 8-GPU node, switch to stage1_ar_8h200 instead.
+# max_steps=5000 -> the last checkpoint is always checkpoint_model_005000.
+generator_ckpt: /inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline/checkpoints/chunkwise/stage1_ar_2h100/checkpoint_model_005000/model.pt
+
+sharding_strategy: full
+
+discrete_cd_N: 48
+guidance_scale: 3.0                    # CFG on img_ref in the teacher AR step
+num_train_timestep: 1000
+timestep_shift: 8.0
+denoising_loss_type: flow
+
+# the CD pipeline reuses the few-step list only for bookkeeping
+denoising_step_list:
+- 1000
+- 750
+- 500
+- 250
+warp_denoising_step: false
+
+lr: 2.0e-06
+batch_size: 1                  # per-GPU; 8 GPUs -> effective batch 8
+num_workers: 4                 # per-rank DataLoader workers (LMDB env opened lazily per worker)
+ema_weight: 0.99
+ema_start_step: 200
+log_iters: 1000
+gradient_checkpointing: true
+
+# --- run control & wandb logging ---
+max_steps: 5000                # stop after 5k optimizer steps; ckpts at 1k/2k/.../5k
+disable_wandb: true            # offline server: wandb fully disabled (also hard-off in code)
+# wandb_key: <removed -- no internet access on this server>
+wandb_entity: null
+wandb_project: dreamidv_causal_forcing
