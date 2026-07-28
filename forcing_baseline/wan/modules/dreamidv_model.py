@@ -376,6 +376,7 @@ class WanModel(ModelMixin, ConfigMixin):
         'patch_size', 'cross_attn_norm', 'qk_norm', 'text_dim', 'window_size'
     ]
     _no_split_modules = ['WanAttentionBlock']
+    _supports_gradient_checkpointing = True
 
     @register_to_config
     def __init__(self,
@@ -487,7 +488,16 @@ class WanModel(ModelMixin, ConfigMixin):
 
         # initialize weights
         self.init_weights()
+        self.gradient_checkpointing = False
 
+    def _set_gradient_checkpointing(self, module=None, value=False, enable=None,
+                                    gradient_checkpointing_func=None):
+        # Compatible with both old diffusers (module, value) and new diffusers
+        # (enable=..., gradient_checkpointing_func=...) calling conventions
+        # (same shim as CausalDreamIDVModel).
+        if enable is not None:
+            value = enable
+        self.gradient_checkpointing = bool(value)
 
     def forward(
         self,
@@ -583,9 +593,29 @@ class WanModel(ModelMixin, ConfigMixin):
             context=context,
             context_lens=context_lens)
 
-        for block in self.blocks:
-            x = block(x, **kwargs)
-        
+        # Per-block activation checkpointing for GRAD-TRACKED forwards -- i.e. the
+        # trainable bidirectional critic (fake_score) in Stage-3 DMD. This model
+        # runs its norms/modulation/RoPE in fp32 (the residual stream itself is
+        # fp32 after `x + y * e[2]`), so a full 21-frame (+ref, ~34k tokens)
+        # forward saves ~4 GB of activations PER BLOCK; 30 blocks OOM even a
+        # 141 GB H200. With checkpointing only the per-block inputs stay resident
+        # and everything else is recomputed in backward. Gate on grad mode, NOT
+        # self.training (the trainer keeps modules in eval()); frozen / no_grad
+        # forwards (real_score, the DMD kl-grad computation, Stage-0 teacher)
+        # are unaffected.
+        if torch.is_grad_enabled() and self.gradient_checkpointing:
+            def create_custom_forward(module):
+                def custom_forward(*inputs, **kw):
+                    return module(*inputs, **kw)
+                return custom_forward
+
+            for block in self.blocks:
+                x = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(block), x, **kwargs, use_reentrant=False)
+        else:
+            for block in self.blocks:
+                x = block(x, **kwargs)
+
         img_ref_length = img_ref.size(1)
       
         x = x[:, img_ref_length:]
