@@ -636,6 +636,24 @@ class CausalDreamIDVModel(ModelMixin, ConfigMixin):
         kwargs = dict(e=e0, seq_lens=seq_lens, grid_sizes=grid_sizes, freqs=self.freqs,
                       context=context, context_lens=context_lens, block_mask=self.block_mask)
 
+        def create_custom_forward(module):
+            def custom_forward(*inputs, **kw):
+                return module(*inputs, **kw)
+            return custom_forward
+
+        # Gradient checkpointing for the GRAD-TRACKED rollout chunks (Self-Forcing
+        # exit steps). Without it, every exit-step chunk saves full activations
+        # across all 30 blocks (plus the torch.cat'ed attention k/v copies) until
+        # the DMD backward -- ~7 chunks x 30 blocks -> O(100 GB)/GPU, which OOMs
+        # even 8xH200 (the rollout does NOT shard across GPUs). With checkpointing
+        # only the tiny block inputs stay resident; everything else is recomputed
+        # in backward. Recompute correctness: the grad-mode attention path is
+        # cache-READ-ONLY (see CausalWanSelfAttention), the cached prefix a chunk
+        # attends to is never rewritten once later chunks start, the crossattn
+        # cache is written once (is_init), and with global attention the
+        # local/global end indices stay equal, so the recomputed cache-index math
+        # is identical to the original forward.
+        use_ckpt = torch.is_grad_enabled() and self.gradient_checkpointing and not cache_ref
         for block_index, block in enumerate(self.blocks):
             kwargs.update({
                 "kv_cache": kv_cache[block_index],
@@ -643,7 +661,11 @@ class CausalDreamIDVModel(ModelMixin, ConfigMixin):
                 "current_start": current_start,
                 "cache_start": cache_start,
             })
-            x = block(x, **kwargs)
+            if use_ckpt:
+                x = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(block), x, **kwargs, use_reentrant=False)
+            else:
+                x = block(x, **kwargs)
 
         if cache_ref:
             return None
