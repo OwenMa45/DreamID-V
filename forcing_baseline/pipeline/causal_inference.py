@@ -75,7 +75,11 @@ class CausalInferencePipeline(torch.nn.Module):
         # 480p 60x104 -> 1560, 640px square 78x78 -> 1521.  Keeps the KV-cache
         # layout (cache offsets / size) exactly aligned with the model.
         self.frame_seq_length = (height_lat // 2) * (width_lat // 2)
-        self.kv_cache_size = (self.num_max_frames + 1) * self.frame_seq_length
+        # Size the KV cache for the ACTUAL rollout length (+1 for the reference
+        # sink). Sizing by num_max_frames (the 21-frame training length) would
+        # overflow the cache write (shape mismatch) as soon as a source video
+        # longer than 81 pixel frames is processed end-to-end.
+        self.kv_cache_size = (num_frames + 1) * self.frame_seq_length
 
         noise = torch.randn([batch_size, num_frames, num_channels, height_lat, width_lat],
                             device=self.device, dtype=dtype)

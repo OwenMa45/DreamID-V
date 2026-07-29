@@ -32,8 +32,11 @@ OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/outputs}
 
 # Match the Stage-0 latent geometry so the conditioning distribution lines up.
 SIZE=${SIZE:-832*480}
-FRAME_NUM=${FRAME_NUM:-81}
-FPS=${FPS:-24}
+# fps/duration alignment: FRAME_NUM<=0 processes the WHOLE source video and
+# FPS<=0 saves at the source video's own fps -> output has the same frame
+# count / fps / duration as the driving video. Set positive values to override.
+FRAME_NUM=${FRAME_NUM:-0}
+FPS=${FPS:-0}
 NUM_GROUPS=${NUM_GROUPS:-8}
 
 # Inference is single-GPU.

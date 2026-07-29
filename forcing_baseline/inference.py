@@ -59,15 +59,30 @@ def _preprocess(args, vae, device, dtype):
         os.makedirs(temp_dir, exist_ok=True)
         process_dwpose(args.ref_video, pose_path, mask_path)
 
-    def _read(path, n):
+    def _read_frames(path, cap):
+        """Read frames (up to ``cap`` if > 0, else ALL) and the native fps."""
         vr = VideoReader(path)
-        frames = [Image.fromarray(vr[i].asnumpy()) for i in range(len(vr))][:n]
-        n2 = (len(frames) - 1) // 4 * 4 + 1
-        return frames[:n2]
+        n = len(vr) if cap <= 0 else min(cap, len(vr))
+        frames = [Image.fromarray(vr[i].asnumpy()) for i in range(n)]
+        return frames, float(vr.get_avg_fps())
 
-    vframes = _read(args.ref_video, args.frame_num)
+    vframes, src_fps = _read_frames(args.ref_video, args.frame_num)
     vw, vh = vframes[0].size
-    mframes = _read(mask_path, args.frame_num)
+    mframes, _ = _read_frames(mask_path, args.frame_num)
+
+    # fps/duration alignment: keep EXACTLY the source frame count. The model can
+    # only generate pixel-frame counts of the form 12m+9 (VAE temporal stride 4
+    # needs 4k+1 frames; the AR rollout needs the latent count (F-1)/4+1 = 3m+3
+    # divisible by num_frame_per_block=3), so pad the conditioning by repeating
+    # the last frame up to the next valid count and trim the decoded video back
+    # to ``num_output_frames`` before saving.
+    num_output_frames = min(len(vframes), len(mframes))
+    vframes, mframes = vframes[:num_output_frames], mframes[:num_output_frames]
+    padded = 12 * max(0, math.ceil((num_output_frames - 9) / 12)) + 9
+    vframes = vframes + [vframes[-1]] * (padded - num_output_frames)
+    mframes = mframes + [mframes[-1]] * (padded - num_output_frames)
+    print(f"[infer] source: {num_output_frames} frames @ {src_fps:.3f} fps "
+          f"-> padded to {padded} frames ({(padded - 1) // 4 + 1} latent frames)")
 
     video_lat = _encode_clip(vae, vframes, video_tf, device, dtype)   # [16, F, h, w]
     mask_lat = _encode_clip(vae, mframes, mask_tf, device, dtype)     # [16, F, h, w]
@@ -92,7 +107,7 @@ def _preprocess(args, vae, device, dtype):
     # ref_conv / patch_embedding (bf16 weights) don't hit a float/bf16 mismatch.
     y = torch.cat([video_lat, mask_lat], dim=0).unsqueeze(0).to(dtype)   # [1, 32, F, h, w]
     img_ref = img_ref.unsqueeze(0).to(dtype)                             # [1, 16, 1, h, w]
-    return y, img_ref
+    return y, img_ref, num_output_frames, src_fps
 
 
 @torch.no_grad()
@@ -128,7 +143,7 @@ def main():
     vae = DreamIDVVAEWrapper(config.vae_checkpoint)
     vae.model.to(device=device, dtype=dtype).eval()
 
-    y, img_ref = _preprocess(args, vae, device, dtype)
+    y, img_ref, num_output_frames, src_fps = _preprocess(args, vae, device, dtype)
     num_frames = y.shape[2]
     assert num_frames % config.num_frame_per_block == 0, \
         f"latent frames {num_frames} must be divisible by num_frame_per_block"
@@ -154,12 +169,18 @@ def main():
 
     pixels = vae.decode_to_pixel(latent.to(dtype))                   # [1, F, 3, H, W]
     video = pixels[0].permute(1, 0, 2, 3)                            # [3, F, H, W]
+    # drop the padding frames so the output has EXACTLY the source frame count,
+    # and save at the source fps (unless an explicit --fps was given) => same
+    # frame count, same fps, same duration as the driving video.
+    video = video[:, :num_output_frames]
+    out_fps = args.fps if args.fps > 0 else src_fps
 
     from dreamidv_wan_faster.utils.utils import cache_video
     os.makedirs(os.path.dirname(os.path.abspath(args.save_file)), exist_ok=True)
-    cache_video(tensor=video[None], save_file=args.save_file, fps=args.fps,
+    cache_video(tensor=video[None], save_file=args.save_file, fps=out_fps,
                 nrow=1, normalize=True, value_range=(-1, 1))
-    print(f"Saved swapped video -> {args.save_file}")
+    print(f"Saved swapped video -> {args.save_file} "
+          f"({num_output_frames} frames @ {out_fps:.3f} fps)")
 
 
 def _parse_args():
@@ -174,8 +195,10 @@ def _parse_args():
     p.add_argument("--mask", default=None, help="Optional precomputed mask video")
     p.add_argument("--save_file", default="outputs/swapped.mp4")
     p.add_argument("--size", default="832*480")
-    p.add_argument("--frame_num", type=int, default=81)
-    p.add_argument("--fps", type=int, default=24)
+    p.add_argument("--frame_num", type=int, default=0,
+                   help="Max source frames to process; <=0 = the whole video")
+    p.add_argument("--fps", type=float, default=0.0,
+                   help="Output fps; <=0 = match the source video fps")
     p.add_argument("--prompt", default="change face")
     p.add_argument("--context_path", default=None)
     return p.parse_args()
