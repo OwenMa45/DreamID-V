@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
-# Streaming face-swap inference using the LATEST checkpoint of each stage, over
-# the FIRST few (default 8) data groups from the Stage-0 input directory.
+# Streaming face-swap inference on a SINGLE H200 card (1xH200; default card 0,
+# override via CUDA_VISIBLE_DEVICES).
+# Runs the LATEST checkpoint of each stage over the FIRST few (default 8) data
+# groups from the Stage-0 input directory.
+#
+# Stage checkpoint locations (all machines share the same storage):
+#   stage1 / stage2 were trained on the 2xH100 machine -> *_2h100 dirs;
+#   stage3 (DMD) was trained on the 8xH200 node        -> stage3_dmd_8h200.
+# Override per stage via STAGE{1,2,3}_DIR if you retrain elsewhere.
 #
 # Data groups share a base name (same triple Stage-0 consumed):
 #   <base>.mp4       source/driving video
 #   <base>_mask.mp4  face-region mask  (passed via --mask, so no DWPose)
 #   <base>_ref.jpg   reference identity face
 #
-# For every requested stage we auto-pick checkpoints/chunkwise/<stage>/
-# checkpoint_model_XXXXXX with the highest step and run inference.py on each
-# group. Stages without any checkpoint are skipped. Outputs -> forcing_baseline/outputs/.
+# Outputs -> forcing_baseline/outputs_1h200/ (kept separate from the 2xH100
+# runs: filenames carry no machine tag, so a shared outputs/ would clobber).
 #
 # Usage:
-#   bash scripts/infer_latest_2h100.sh              # all stages that have ckpts
-#   STAGES=1 bash scripts/infer_latest_2h100.sh     # only stage 1
-#   NUM_GROUPS=5 bash scripts/infer_latest_2h100.sh # first 5 groups
-#   STAGES=3 CKPT_STEP=500 bash scripts/infer_latest_2h100.sh
+#   bash scripts/infer_latest_1h200.sh              # all stages that have ckpts
+#   STAGES=3 bash scripts/infer_latest_1h200.sh     # only stage 3
+#   NUM_GROUPS=5 bash scripts/infer_latest_1h200.sh # first 5 groups
+#   CUDA_VISIBLE_DEVICES=3 bash scripts/infer_latest_1h200.sh  # use card 3
+#   STAGES=3 CKPT_STEP=500 bash scripts/infer_latest_1h200.sh
 #       -> pin a specific step instead of the latest (e.g. the stage-3 DMD
 #          deliverable is the step-500 ckpt of the 1000-step run)
 set -euo pipefail
@@ -27,8 +34,10 @@ DREAMIDV_ROOT=${DREAMIDV_ROOT:-/inspire/hdd/global_user/liumingyu-253208120284/l
 MODELS_DIR=${MODELS_DIR:-/inspire/hdd/global_user/liumingyu-253208120284/lzk/models/DreamID-V}
 INPUT_DIR=${INPUT_DIR:-/inspire/hdd/global_user/liumingyu-253208120284/lzk/codes/Causal-Forcing_LivingSwap/datasets/humanvid_5000/part_004/input}
 CONTEXT_PATH=${CONTEXT_PATH:-${DREAMIDV_ROOT}/dreamidv_wan_faster/context.pth}
-CONFIG=${CONFIG:-configs/inference_2h100.yaml}
-OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/outputs}
+# Reuse the existing 8h200-machine inference config (same shared-storage model
+# paths; inference itself is single-GPU regardless).
+CONFIG=${CONFIG:-configs/inference_8h200.yaml}
+OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/outputs_1h200}
 
 # Match the Stage-0 latent geometry so the conditioning distribution lines up.
 SIZE=${SIZE:-832*480}
@@ -36,7 +45,7 @@ FRAME_NUM=${FRAME_NUM:-81}
 FPS=${FPS:-24}
 NUM_GROUPS=${NUM_GROUPS:-8}
 
-# Inference is single-GPU.
+# Single H200 card (pick which one via CUDA_VISIBLE_DEVICES).
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 mkdir -p "${OUT_DIR}"
 
@@ -49,12 +58,12 @@ for f in yolox_l.onnx dw-ll_ucoco_384.onnx; do
   fi
 done
 
-# Stage -> (logdir, short name). Override per stage via env if a stage was
-# trained on different hardware, e.g. STAGE3_DIR=checkpoints/chunkwise/stage3_dmd_4h100.
+# Stage -> (logdir, short name). Stages 1-2 come from the 2xH100 training runs
+# (shared storage), stage 3 from this node's 8-GPU DMD run.
 declare -A LOGDIR=(
   [1]="${STAGE1_DIR:-checkpoints/chunkwise/stage1_ar_2h100}"
   [2]="${STAGE2_DIR:-checkpoints/chunkwise/stage2_cd_2h100}"
-  [3]="${STAGE3_DIR:-checkpoints/chunkwise/stage3_dmd_2h100}"
+  [3]="${STAGE3_DIR:-checkpoints/chunkwise/stage3_dmd_8h200}"
 )
 declare -A SNAME=( [1]="stage1_ar" [2]="stage2_cd" [3]="stage3_dmd" )
 
@@ -89,7 +98,7 @@ for st in ${STAGES}; do
   step="$(basename "${latest}" | sed 's/checkpoint_model_//')"
   echo "[infer][stage${st}] latest ckpt: ${ckpt} (step ${step})"
 
-  # Per-stage output subfolder: outputs/stage1/, outputs/stage2/, outputs/stage3/.
+  # Per-stage output subfolder: outputs_1h200/stage1/, .../stage2/, .../stage3/.
   stage_out="${OUT_DIR}/stage${st}"
   mkdir -p "${stage_out}"
 
