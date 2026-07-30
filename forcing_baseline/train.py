@@ -39,6 +39,10 @@ def main():
     parser.add_argument("--resume-ckpt", type=str, default="")
     parser.add_argument("--no-auto-resume", action="store_true",
                         help="ignore existing checkpoints in --logdir and start fresh")
+    # Init override: replaces config.generator_ckpt without editing the yaml
+    # (e.g. Stage-3a DMD initialised from a chosen Stage-2 checkpoint).
+    parser.add_argument("--generator-ckpt", type=str, default="",
+                        help="override config.generator_ckpt (path to a model.pt)")
     args = parser.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +59,8 @@ def main():
         config.resume_ckpt = args.resume_ckpt
     if args.no_auto_resume:
         config.auto_resume = False
+    if args.generator_ckpt:
+        config.generator_ckpt = args.generator_ckpt
 
     trainer = build_trainer(config)
     trainer.train()
