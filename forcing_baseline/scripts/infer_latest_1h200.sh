@@ -17,8 +17,8 @@
 #   <base>_mask.mp4  face-region mask  (passed via --mask, so no DWPose)
 #   <base>_ref.jpg   reference identity face
 #
-# Outputs -> forcing_baseline/outputs_1h200/ (kept separate from the 2xH100
-# runs: filenames carry no machine tag, so a shared outputs/ would clobber).
+# Outputs -> forcing_baseline/outputs/ (per-stage subfolders; override via
+# OUT_DIR=...).
 #
 # Usage:
 #   bash scripts/infer_latest_1h200.sh              # all stages that have ckpts
@@ -44,7 +44,7 @@ CONTEXT_PATH=${CONTEXT_PATH:-${DREAMIDV_ROOT}/dreamidv_wan_faster/context.pth}
 # Reuse the existing 8h200-machine inference config (same shared-storage model
 # paths; inference itself is single-GPU regardless).
 CONFIG=${CONFIG:-configs/inference_8h200.yaml}
-OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/outputs_1h200}
+OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/outputs}
 
 # Match the Stage-0 latent geometry so the conditioning distribution lines up.
 SIZE=${SIZE:-832*480}
@@ -69,10 +69,12 @@ for f in yolox_l.onnx dw-ll_ucoco_384.onnx; do
 done
 
 # Stage -> (logdir, short name). Stages 1-2 come from the 2xH100 training runs
-# (shared storage), stage 3 / 3a from this node's 8-GPU DMD runs.
-# stage3a dirs carry a _from<step> suffix (one per stage2-init ckpt); default to
-# the most recently trained one, or pin a specific run via STAGE3A_DIR.
-stage3a_default="$(ls -dt checkpoints/chunkwise/stage3a_dmd_8h200_from*/ 2>/dev/null | head -n 1 || true)"
+# (shared storage), stage 3 / 3a from the 8xH200 / 4xH100 DMD runs.
+# stage3a dirs carry a machine tag and a _from<step> suffix (one per stage2-init
+# ckpt), e.g. stage3a_dmd_8h200_from005000 or stage3a_dmd_4h100_from003000;
+# default to the most recently trained one across ALL machines (ckpts are
+# hardware-independent), or pin a specific run via STAGE3A_DIR.
+stage3a_default="$(ls -dt checkpoints/chunkwise/stage3a_dmd_*_from*/ 2>/dev/null | head -n 1 || true)"
 stage3a_default="${stage3a_default%/}"
 declare -A LOGDIR=(
   [1]="${STAGE1_DIR:-checkpoints/chunkwise/stage1_ar_2h100}"
@@ -113,7 +115,7 @@ for st in ${STAGES}; do
   step="$(basename "${latest}" | sed 's/checkpoint_model_//')"
   echo "[infer][stage${st}] latest ckpt: ${ckpt} (step ${step})"
 
-  # Per-stage output subfolder: outputs_1h200/stage1/, ..., .../stage3a/.
+  # Per-stage output subfolder: outputs/stage1/, ..., .../stage3a/.
   stage_out="${OUT_DIR}/stage${st}"
   mkdir -p "${stage_out}"
 
