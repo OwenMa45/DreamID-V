@@ -5,6 +5,10 @@
 # text_encoder_cpu_offload for the tighter 80 GB cards); only the generator
 # init and the logdir differ. 4-GPU twin of stage3a_dmd_8h200.sh.
 #
+# Ckpt cadence: saves every 50 steps and stops at step 500 (the DMD deliverable
+# zone; over-training DMD degrades diversity/quality). This overrides the
+# 100/1000 baked into the shared yaml -- tune via LOG_ITERS / MAX_STEPS.
+#
 # Interface (CKPT_STEP semantics mirror infer_latest_*.sh):
 #   bash scripts/stage3a_dmd_4h100.sh                  # init from LATEST stage2 ckpt
 #   CKPT_STEP=3000 bash scripts/stage3a_dmd_4h100.sh   # init from checkpoint_model_003000
@@ -17,6 +21,12 @@
 # (override via LOGDIR=...), so runs from different Stage-2 ckpts never clobber
 # each other. Inference: infer_latest_*.sh stage id "3a" (auto-discovers the
 # most recent stage3a_dmd_*_from<step> run on the shared storage).
+#
+# Crash-resume: every checkpoint also writes <LOGDIR>/resume_state.pt (step +
+# raw generator + critic + EMA). Re-running this script with the SAME CKPT_STEP
+# lands in the same LOGDIR and continues from that state automatically.
+#   NO_AUTO_RESUME=1     -> ignore the saved state, restart from the stage2 ckpt
+#   RESUME_CKPT=/path/to/logdir_or_resume_state.pt -> resume a specific state
 set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-/inspire/hdd/global_user/liumingyu-253208120284/lzk/mrq/swapsf/pure_dreamidv/DreamID-V/forcing_baseline}
@@ -47,6 +57,10 @@ echo "[stage3a] DMD init from stage2 ckpt: ${GENERATOR_CKPT} (step ${init_step})
 LOGDIR=${LOGDIR:-checkpoints/chunkwise/stage3a_dmd_4h100_from${init_step}}
 mkdir -p "${LOGDIR}"
 
+# Ckpt every 50 steps, stop at 500 (overrides log_iters/max_steps in the yaml).
+MAX_STEPS=${MAX_STEPS:-500}
+LOG_ITERS=${LOG_ITERS:-50}
+
 export DIST_TIMEOUT_MIN=${DIST_TIMEOUT_MIN:-120}
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 # Reduce allocator fragmentation; critical here given the rollout memory spikes.
@@ -56,10 +70,17 @@ export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:Tr
 WANDB_FLAG=""
 [ "${DISABLE_WANDB:-0}" = "1" ] && WANDB_FLAG="--disable-wandb"
 
+# Resume control (default: auto-resume from LOGDIR/resume_state.pt if present).
+RESUME_ARG=""
+[ -n "${RESUME_CKPT:-}" ] && RESUME_ARG="--resume-ckpt ${RESUME_CKPT}"
+[ "${NO_AUTO_RESUME:-0}" = "1" ] && RESUME_ARG="${RESUME_ARG} --no-auto-resume"
+
 torchrun --nproc_per_node="${NPROC}" --master_port=29524 \
   train.py \
   --config_path configs/dmd_4h100.yaml \
   --logdir "${LOGDIR}" \
   --generator-ckpt "${GENERATOR_CKPT}" \
+  --max-steps "${MAX_STEPS}" \
+  --log-iters "${LOG_ITERS}" \
   --wandb-save-dir "${LOGDIR}" \
-  ${WANDB_FLAG}
+  ${WANDB_FLAG} ${RESUME_ARG}

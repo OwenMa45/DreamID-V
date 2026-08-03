@@ -17,8 +17,8 @@
 #   <base>_mask.mp4  face-region mask  (passed via --mask, so no DWPose)
 #   <base>_ref.jpg   reference identity face
 #
-# Outputs -> forcing_baseline/outputs/ (per-stage subfolders; override via
-# OUT_DIR=...).
+# Outputs -> forcing_baseline/outputs_1h200/ (kept separate from the 2xH100
+# runs: filenames carry no machine tag, so a shared outputs/ would clobber).
 #
 # Usage:
 #   bash scripts/infer_latest_1h200.sh              # all stages that have ckpts
@@ -44,7 +44,7 @@ CONTEXT_PATH=${CONTEXT_PATH:-${DREAMIDV_ROOT}/dreamidv_wan_faster/context.pth}
 # Reuse the existing 8h200-machine inference config (same shared-storage model
 # paths; inference itself is single-GPU regardless).
 CONFIG=${CONFIG:-configs/inference_8h200.yaml}
-OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/outputs}
+OUT_DIR=${OUT_DIR:-${PROJECT_ROOT}/outputs_1h200}
 
 # Match the Stage-0 latent geometry so the conditioning distribution lines up.
 SIZE=${SIZE:-832*480}
@@ -115,7 +115,7 @@ for st in ${STAGES}; do
   step="$(basename "${latest}" | sed 's/checkpoint_model_//')"
   echo "[infer][stage${st}] latest ckpt: ${ckpt} (step ${step})"
 
-  # Per-stage output subfolder: outputs/stage1/, ..., .../stage3a/.
+  # Per-stage output subfolder: outputs_1h200/stage1/, ..., .../stage3a/.
   stage_out="${OUT_DIR}/stage${st}"
   mkdir -p "${stage_out}"
 

@@ -43,6 +43,13 @@ def main():
     # (e.g. Stage-3a DMD initialised from a chosen Stage-2 checkpoint).
     parser.add_argument("--generator-ckpt", type=str, default="",
                         help="override config.generator_ckpt (path to a model.pt)")
+    # Run-length / ckpt-cadence overrides (e.g. Stage-3a: 50-step saves, stop at
+    # 500) so stage variants can share one yaml without forking it. 0 = keep the
+    # config value.
+    parser.add_argument("--max-steps", type=int, default=0,
+                        help="override config.max_steps (stop after N optimizer steps)")
+    parser.add_argument("--log-iters", type=int, default=0,
+                        help="override config.log_iters (checkpoint every N steps)")
     args = parser.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +68,10 @@ def main():
         config.auto_resume = False
     if args.generator_ckpt:
         config.generator_ckpt = args.generator_ckpt
+    if args.max_steps:
+        config.max_steps = args.max_steps
+    if args.log_iters:
+        config.log_iters = args.log_iters
 
     trainer = build_trainer(config)
     trainer.train()

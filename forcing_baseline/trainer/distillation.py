@@ -6,6 +6,13 @@ Self-Forcing; the bidirectional DreamID-V-Faster teacher (``real_score``, frozen
 and the bidirectional critic (``fake_score``) score the rollout, with CFG applied
 to ``img_ref``.  Conditioning (``y`` / ``img_ref``) comes from the swap-latent
 LMDB; the ground-truth latent is ignored by the generator (backward-simulated).
+
+Crash-resume: every ``save()`` also (atomically) writes ``<logdir>/resume_state.pt``
+holding the FULL training state -- step + raw generator + critic (+ EMA shadow).
+DMD is adversarial, so generator and critic must resume *together*; the per-step
+``model.pt`` (generator or EMA only, consumed by inference) stays unchanged.
+On start-up the latest state in ``logdir`` is picked up automatically
+(``auto_resume``, on by default; explicit ``resume_ckpt`` takes priority).
 """
 import gc
 import os
@@ -63,10 +70,35 @@ class Trainer:
 
         self.output_path = config.logdir
 
+        # ---- crash-resume (Stage-3 / 3a) ------------------------------------
+        # Resolve BEFORE building the DMD model: the resume payload supersedes
+        # the generator / critic init ckpts, so their (multi-GB) loads inside
+        # the DMD ctor are skipped; the frozen real_score teacher still loads
+        # from real_score_ckpt as usual.
+        resume_path = self._resolve_resume_state(config)
+        self._resume_payload = None
+        if resume_path:
+            payload = torch.load(resume_path, map_location="cpu")
+            self.step = int(payload.get("step", 0))
+            self._resume_payload = payload
+            if self.is_main_process:
+                print(f"[distillation] RESUME @ step {self.step} from {resume_path} "
+                      "(generator+critic+EMA from state; AdamW moments restart)")
+            if "generator" in payload:
+                config.generator_ckpt = ""
+            if "critic" in payload:
+                config.fake_score_ckpt = ""
+
         if config.distribution_loss == "dmd":
             self.model = DMD(config, device=self.device)
         else:
             raise ValueError("Invalid distribution matching loss")
+
+        # Restore raw generator + critic into the *un-wrapped* modules (purely
+        # local op; loading after FSDP-wrap goes through a full state-dict
+        # all-gather/scatter that can desync ranks on slow shared storage).
+        if self._resume_payload is not None:
+            self._load_resume_weights(self._resume_payload)
 
         # Sync after the (network-backed) ckpt/T5/VAE loading inside the model ctor,
         # before any FSDP collective, so a fast rank does not race into the first
@@ -114,12 +146,90 @@ class Trainer:
         if self.step < getattr(config, "ema_start_step", 0):
             self.generator_ema = None
 
+        # On resume past ema_start_step, continue the EMA target from the saved
+        # shadow rather than re-initialising it from the resumed student weights.
+        if self._resume_payload is not None:
+            if self.generator_ema is not None and "generator_ema" in self._resume_payload:
+                self._restore_ema_shadow(self._resume_payload["generator_ema"])
+            self._resume_payload = None  # free the CPU copies
+
         self.max_grad_norm_generator = getattr(config, "max_grad_norm_generator", 10.0)
         self.max_grad_norm_critic = getattr(config, "max_grad_norm_critic", 10.0)
         self.previous_time = None
 
+    # ---- crash-resume helpers ------------------------------------------------
+    @staticmethod
+    def _clean_key(k):
+        # EMA shadows are collected AFTER FSDP auto-wrap, so their keys carry
+        # `_fsdp_wrapped_module.` mangling on inner submodules; strip it so keys
+        # match across save/restore (and across differing wrap layouts).
+        return k.replace("_fsdp_wrapped_module.", "")
+
+    def _resolve_resume_state(self, config):
+        """Return the resume_state.pt path to continue from, else None.
+
+        Priority: explicit ``resume_ckpt`` (a resume_state.pt file, or a dir
+        holding one) > auto-scan of ``logdir``. Auto-resume is on by default and
+        can be turned off with ``auto_resume: false`` (--no-auto-resume).
+        """
+        explicit = getattr(config, "resume_ckpt", None)
+        if explicit:
+            path = str(explicit)
+            if os.path.isdir(path):
+                path = os.path.join(path, "resume_state.pt")
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"resume_ckpt given but not found: {path}")
+            return path
+
+        if not bool(getattr(config, "auto_resume", True)):
+            return None
+
+        logdir = getattr(config, "logdir", None)
+        if logdir:
+            path = os.path.join(logdir, "resume_state.pt")
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _load_resume_weights(self, payload):
+        """Restore raw generator + critic into the un-wrapped modules.
+
+        The AdamW moments are NOT restored -- same policy as the Stage-1/2
+        resumes: lr is constant (no scheduler state), beta1=0 leaves the first
+        moment empty anyway, and the second moment re-warms within a few steps.
+        """
+        if "generator" in payload:
+            sd = {self._clean_key(k): v for k, v in payload["generator"].items()}
+            missing, unexpected = self.model.generator.load_state_dict(sd, strict=False)
+            if self.is_main_process:
+                print(f"[distillation] resumed generator: {len(missing)} missing, "
+                      f"{len(unexpected)} unexpected")
+        if "critic" in payload:
+            sd = {self._clean_key(k): v for k, v in payload["critic"].items()}
+            missing, unexpected = self.model.fake_score.load_state_dict(sd, strict=False)
+            if self.is_main_process:
+                print(f"[distillation] resumed critic (fake_score): {len(missing)} missing, "
+                      f"{len(unexpected)} unexpected")
+
+    def _restore_ema_shadow(self, saved):
+        """Copy a saved EMA shadow into the freshly-initialised EMA_FSDP shadow
+        (keys matched after stripping FSDP mangling; unmatched keep init)."""
+        current = self.generator_ema.shadow
+        by_clean = {self._clean_key(k): k for k in current}
+        matched = 0
+        for k, v in saved.items():
+            tgt = by_clean.get(self._clean_key(k))
+            if tgt is not None:
+                current[tgt] = v.detach().clone().float().cpu()
+                matched += 1
+        if self.is_main_process:
+            print(f"[distillation] EMA shadow restored: {matched}/{len(current)} tensors")
+
     def save(self):
+        # fsdp_state_dict is a collective -- EVERY rank must call it (non-rank0
+        # ranks get an empty dict back); only rank 0 writes to disk.
         generator_state_dict = fsdp_state_dict(self.model.generator)
+        critic_state_dict = fsdp_state_dict(self.model.fake_score)
         if self.generator_ema is not None and self.config.ema_start_step < self.step:
             state_dict = {"generator_ema": self.generator_ema.state_dict()}
         else:
@@ -129,6 +239,26 @@ class Trainer:
             os.makedirs(ckpt_dir, exist_ok=True)
             torch.save(state_dict, os.path.join(ckpt_dir, "model.pt"))
             print("Model saved to", ckpt_dir)
+
+            # Crash-resume state: step + raw generator + critic (+ EMA shadow).
+            # DMD is adversarial -- resuming the generator with a re-initialised
+            # critic would corrupt the DMD gradient for a while -- so the full
+            # state travels together. Only the LATEST state is kept (~17 GB
+            # fp32); written to a tmp file and os.replace'd so a crash mid-write
+            # never corrupts an existing resume point.
+            if bool(getattr(self.config, "save_resume_state", True)):
+                resume_state = {
+                    "step": self.step,
+                    "generator": generator_state_dict,
+                    "critic": critic_state_dict,
+                }
+                if self.generator_ema is not None:
+                    resume_state["generator_ema"] = self.generator_ema.state_dict()
+                tmp_path = os.path.join(self.output_path, "resume_state.pt.tmp")
+                torch.save(resume_state, tmp_path)
+                os.replace(tmp_path, os.path.join(self.output_path, "resume_state.pt"))
+                print(f"Resume state (step {self.step}) saved to",
+                      os.path.join(self.output_path, "resume_state.pt"))
 
     def fwdbwd_one_step(self, batch, train_generator):
         self.model.eval()
@@ -166,6 +296,12 @@ class Trainer:
     def train(self):
         start_step = self.step
         max_steps = int(getattr(self.config, "max_steps", 0) or 0)
+        # A finished run re-launched by mistake must not train (and overwrite
+        # the resume state) any further.
+        if max_steps and self.step >= max_steps:
+            if self.is_main_process:
+                print(f"Resumed step {self.step} >= max_steps={max_steps}; nothing to do.")
+            return
         while True:
             train_generator = self.step % self.config.dfake_gen_update_ratio == 0
 
